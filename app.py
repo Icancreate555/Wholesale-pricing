@@ -1,6 +1,6 @@
 
 import streamlit as st
-from datetime import date
+import pandas as pd
 
 st.set_page_config(
     page_title="Wholesale Pricing Workspace",
@@ -8,88 +8,39 @@ st.set_page_config(
 )
 
 st.title("Wholesale Pricing Workspace")
-st.write("Enter and review your wholesale pricing information.")
 
-# Store products during the current session
-if "products" not in st.session_state:
-    st.session_state.products = []
-
-# -----------------------------
-# ADD PRODUCT
-# -----------------------------
-st.subheader("Add Product")
-
-product = st.text_input("Product")
-buying_price = st.number_input(
-    "Buying Price (KES)",
-    min_value=0.0,
-    step=1.0
+st.write(
+    "Upload your QuickBooks Excel export to prepare your pricing workspace."
 )
 
-quantity = st.number_input(
-    "Quantity",
-    min_value=1,
-    step=1
+# -----------------------------------
+# EXCEL UPLOAD
+# -----------------------------------
+
+st.subheader("Upload Purchase Data")
+
+uploaded_file = st.file_uploader(
+    "Upload QuickBooks Excel file",
+    type=["xlsx", "xls"]
 )
 
-current_price = st.number_input(
-    "Current Selling Price (KES)",
-    min_value=0.0,
-    step=1.0
-)
+if uploaded_file is not None:
 
-purchase_date = st.date_input(
-    "Purchase Date",
-    value=date.today()
-)
+    try:
+        data = pd.read_excel(uploaded_file)
 
-if st.button("Add Product"):
+        st.success("Excel file uploaded successfully.")
 
-    if product and buying_price > 0 and current_price > 0:
+        st.subheader("Imported Purchase Data")
 
-        margin = (
-            (current_price - buying_price)
-            / current_price
-        ) * 100
-
-        new_product = {
-            "Product": product,
-            "Buying Price": buying_price,
-            "Market Range": "",
-            "Recommended Price": "",
-            "Current Selling Price": current_price,
-            "Current Margin": margin,
-            "Recommended Margin": "",
-            "Quantity": quantity,
-            "Purchase Date": purchase_date
-        }
-
-        st.session_state.products.append(new_product)
-
-        st.success(f"{product} added successfully.")
-
-    else:
-        st.warning(
-            "Please enter the product, buying price "
-            "and current selling price."
+        st.dataframe(
+            data,
+            use_container_width=True,
+            hide_index=True
         )
 
-# -----------------------------
-# PRICING TABLE
-# -----------------------------
-if st.session_state.products:
+    except Exception as e:
 
-    st.subheader("Pricing Workspace")
-
-    st.dataframe(
-        st.session_state.products,
-        use_container_width=True,
-        hide_index=True
-    )
-
-else:
-
-    st.info(
-        "No products have been added yet. "
-        "Enter a product above to begin."
-    )
+        st.error(
+            f"We could not read this Excel file: {e}"
+        )
