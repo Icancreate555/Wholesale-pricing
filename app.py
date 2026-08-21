@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-import math
 
 st.set_page_config(
     page_title="Wholesale Pricing Workspace",
@@ -38,11 +37,51 @@ strategy_margins = {
 # =========================================
 
 def round_to_5(value):
-    """Round a price to the nearest KES 5."""
+    """Round price to nearest KES 5."""
+
     if pd.isna(value):
         return None
 
     return round(value / 5) * 5
+
+
+# =========================================
+# VELOCITY SIGNAL
+# =========================================
+
+def get_velocity_signal(velocity):
+
+    if velocity == "Fast":
+
+        return (
+            "Protect volume. "
+            "A competitive price may be more valuable "
+            "than maximising margin."
+        )
+
+    elif velocity == "Medium":
+
+        return (
+            "Balanced movement. "
+            "Maintain a reasonable balance between "
+            "margin and competitiveness."
+        )
+
+    elif velocity == "Slow":
+
+        return (
+            "Review stock movement. "
+            "Consider whether price, stock age, demand, "
+            "or purchasing decisions need attention."
+        )
+
+    else:
+
+        return (
+            "Velocity unknown. "
+            "Collect sales history before using velocity "
+            "as a pricing adjustment."
+        )
 
 
 # =========================================
@@ -178,14 +217,18 @@ if uploaded_file is not None:
             )
 
 
-            # Market information
+            # -----------------------------------------
+            # MARKET
+            # -----------------------------------------
 
             pricing_data["Market Low"] = None
 
             pricing_data["Market High"] = None
 
 
-            # Business strategy
+            # -----------------------------------------
+            # STRATEGY
+            # -----------------------------------------
 
             pricing_data["Pricing Strategy"] = (
                 "Standard"
@@ -197,35 +240,49 @@ if uploaded_file is not None:
             )
 
 
-            # Pricing calculations
+            # -----------------------------------------
+            # PRICING
+            # -----------------------------------------
 
             pricing_data["Minimum Viable Price"] = None
 
             pricing_data["Recommended Price"] = None
 
 
-            # Current business price
+            # -----------------------------------------
+            # CURRENT / APPROVED
+            # -----------------------------------------
 
             pricing_data["Current Selling Price"] = None
-
-
-            # Approved business decision
 
             pricing_data["Approved Selling Price"] = None
 
 
-            # Profitability
+            # -----------------------------------------
+            # PROFITABILITY
+            # -----------------------------------------
 
             pricing_data["Current Margin"] = None
 
             pricing_data["Current Margin %"] = None
 
 
-            # Future intelligence inputs
+            # -----------------------------------------
+            # VELOCITY
+            # -----------------------------------------
 
             pricing_data["Sales Velocity"] = (
                 "Unknown"
             )
+
+            pricing_data["Velocity Signal"] = (
+                "Velocity unknown."
+            )
+
+
+            # -----------------------------------------
+            # FUTURE AI
+            # -----------------------------------------
 
             pricing_data["AI Competitiveness"] = (
                 "Pending"
@@ -236,19 +293,22 @@ if uploaded_file is not None:
             )
 
 
-            # Decision output
+            # -----------------------------------------
+            # DECISION
+            # -----------------------------------------
 
             pricing_data["Pricing Status"] = (
                 "Pending market data"
             )
 
             pricing_data["Pricing Explanation"] = (
-                "Enter market prices to generate a recommendation."
+                "Enter market prices to generate "
+                "a recommendation."
             )
 
 
             # =========================================
-            # SUCCESS MESSAGE
+            # SUCCESS
             # =========================================
 
             st.success(
@@ -265,8 +325,9 @@ if uploaded_file is not None:
             )
 
             st.write(
-                "Enter observed market prices and choose the "
-                "business pricing strategy."
+                "Enter market information, choose the "
+                "pricing strategy, and classify sales "
+                "velocity where known."
             )
 
 
@@ -297,6 +358,8 @@ if uploaded_file is not None:
                     "Current Margin",
 
                     "Current Margin %",
+
+                    "Velocity Signal",
 
                     "AI Competitiveness",
 
@@ -410,7 +473,9 @@ if uploaded_file is not None:
 
             edited_data["Target Margin %"] = (
 
-                edited_data["Pricing Strategy"]
+                edited_data[
+                    "Pricing Strategy"
+                ]
                 .map(strategy_margins)
                 * 100
 
@@ -445,12 +510,10 @@ if uploaded_file is not None:
 
 
             # =========================================
-            # RECOMMENDATION ENGINE
+            # RECOMMENDED PRICE
             # =========================================
 
             for index, row in edited_data.iterrows():
-
-                buying_price = row["Buying Price"]
 
                 market_low = pd.to_numeric(
                     row["Market Low"],
@@ -490,8 +553,7 @@ if uploaded_file is not None:
                         index,
                         "Pricing Explanation"
                     ] = (
-                        "Enter both Market Low and "
-                        "Market High."
+                        "Enter Market Low and Market High."
                     )
 
                     continue
@@ -560,12 +622,8 @@ if uploaded_file is not None:
                         index,
                         "Pricing Explanation"
                     ] = (
-
-                        "The target margin can be achieved "
-                        "within the observed market range. "
-                        "The recommendation is constrained "
-                        "by the market and rounded to KES 5."
-
+                        "Target margin can be achieved "
+                        "within the observed market range."
                     )
 
 
@@ -591,14 +649,22 @@ if uploaded_file is not None:
                         index,
                         "Pricing Explanation"
                     ] = (
-
-                        "The minimum price required to achieve "
-                        "the selected target margin is above "
-                        "the observed market ceiling. "
-                        "Review the margin, buying cost, "
-                        "or competitive position."
-
+                        "The minimum price required to "
+                        "achieve the target margin is above "
+                        "the observed market ceiling."
                     )
+
+
+            # =========================================
+            # VELOCITY SIGNAL
+            # =========================================
+
+            edited_data["Velocity Signal"] = (
+
+                edited_data["Sales Velocity"]
+                .apply(get_velocity_signal)
+
+            )
 
 
             # =========================================
@@ -660,7 +726,7 @@ if uploaded_file is not None:
 
 
             # =========================================
-            # HANDLE EMPTY SELLING PRICE
+            # HANDLE EMPTY PRICE
             # =========================================
 
             edited_data.loc[
@@ -684,7 +750,7 @@ if uploaded_file is not None:
 
 
             # =========================================
-            # SAVE CHANGES
+            # SAVE
             # =========================================
 
             if st.button(
@@ -702,7 +768,7 @@ if uploaded_file is not None:
 
 
             # =========================================
-            # SAVED PRICING
+            # DISPLAY SAVED DATA
             # =========================================
 
             if (
