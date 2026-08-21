@@ -28,11 +28,12 @@ if uploaded_file is not None:
         data = raw_data.dropna(how="all").copy()
 
         # Clean column names
-        data.columns = (
-            data.columns
-            .astype(str)
-            .str.strip()
-        )
+       data.columns = (
+    data.columns
+    .astype(str)
+    .str.replace("\xa0", " ", regex=False)
+    .str.strip()
+)
 
         # Remove rows without a product
         data = data[
