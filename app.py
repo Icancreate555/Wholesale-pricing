@@ -19,6 +19,18 @@ if "saved_pricing_data" not in st.session_state:
 
 
 # ---------------------------------
+# PRICING STRATEGIES
+# ---------------------------------
+
+strategy_margins = {
+    "Competitive": 0.07,
+    "Standard": 0.10,
+    "Higher Margin": 0.15,
+    "Clearance": 0.00
+}
+
+
+# ---------------------------------
 # FILE UPLOAD
 # ---------------------------------
 
@@ -143,17 +155,21 @@ if uploaded_file is not None:
                 data["Cost Price"]
             )
 
-            pricing_data["Market Range"] = ""
+            pricing_data["Market Low"] = None
 
-            pricing_data["Recommended Price"] = ""
+            pricing_data["Market High"] = None
+
+            pricing_data["Pricing Strategy"] = "Standard"
+
+            pricing_data["Target Margin %"] = 10.0
+
+            pricing_data["Minimum Viable Price"] = None
 
             pricing_data["Current Selling Price"] = None
 
             pricing_data["Current Margin"] = None
 
             pricing_data["Current Margin %"] = None
-
-            pricing_data["Recommended Margin"] = ""
 
 
             # ---------------------------------
@@ -169,10 +185,10 @@ if uploaded_file is not None:
             # PRICING WORKSPACE
             # ---------------------------------
 
-            st.subheader("Pricing Workspace")
+            st.subheader("Pricing Engine")
 
             st.write(
-                "Enter the current selling price for each product."
+                "Enter the current market range and choose a pricing strategy."
             )
 
 
@@ -188,11 +204,10 @@ if uploaded_file is not None:
                 disabled=[
                     "Product",
                     "Buying Price",
-                    "Market Range",
-                    "Recommended Price",
+                    "Target Margin %",
+                    "Minimum Viable Price",
                     "Current Margin",
-                    "Current Margin %",
-                    "Recommended Margin"
+                    "Current Margin %"
                 ],
 
                 column_config={
@@ -203,14 +218,51 @@ if uploaded_file is not None:
                             format="KES %.2f"
                         ),
 
+                    "Market Low":
+                        st.column_config.NumberColumn(
+                            "Market Low",
+                            help="Lowest observed reasonable market price.",
+                            min_value=0,
+                            step=1,
+                            format="KES %.2f"
+                        ),
+
+                    "Market High":
+                        st.column_config.NumberColumn(
+                            "Market High",
+                            help="Highest observed reasonable market price.",
+                            min_value=0,
+                            step=1,
+                            format="KES %.2f"
+                        ),
+
+                    "Pricing Strategy":
+                        st.column_config.SelectboxColumn(
+                            "Pricing Strategy",
+                            options=[
+                                "Competitive",
+                                "Standard",
+                                "Higher Margin",
+                                "Clearance"
+                            ],
+                            required=True
+                        ),
+
+                    "Target Margin %":
+                        st.column_config.NumberColumn(
+                            "Target Margin %",
+                            format="%.2f%%"
+                        ),
+
+                    "Minimum Viable Price":
+                        st.column_config.NumberColumn(
+                            "Minimum Viable Price",
+                            format="KES %.2f"
+                        ),
+
                     "Current Selling Price":
                         st.column_config.NumberColumn(
                             "Current Selling Price",
-                            help=(
-                                "Enter the price at which "
-                                "the wholesaler currently "
-                                "sells this product."
-                            ),
                             min_value=0,
                             step=1,
                             format="KES %.2f"
@@ -232,7 +284,32 @@ if uploaded_file is not None:
 
 
             # ---------------------------------
-            # CONVERT SELLING PRICE TO NUMBER
+            # ASSIGN TARGET MARGIN
+            # ---------------------------------
+
+            edited_data["Target Margin %"] = (
+                edited_data["Pricing Strategy"]
+                .map(strategy_margins)
+                * 100
+            )
+
+
+            # ---------------------------------
+            # CALCULATE MINIMUM VIABLE PRICE
+            # ---------------------------------
+
+            target_margin_decimal = (
+                edited_data["Target Margin %"] / 100
+            )
+
+            edited_data["Minimum Viable Price"] = (
+                edited_data["Buying Price"]
+                / (1 - target_margin_decimal)
+            )
+
+
+            # ---------------------------------
+            # CURRENT SELLING PRICE
             # ---------------------------------
 
             edited_data["Current Selling Price"] = pd.to_numeric(
@@ -242,7 +319,7 @@ if uploaded_file is not None:
 
 
             # ---------------------------------
-            # CALCULATE CURRENT MARGIN
+            # CURRENT MARGIN
             # ---------------------------------
 
             edited_data["Current Margin"] = (
@@ -252,7 +329,7 @@ if uploaded_file is not None:
 
 
             # ---------------------------------
-            # CALCULATE CURRENT MARGIN %
+            # CURRENT MARGIN %
             # ---------------------------------
 
             edited_data["Current Margin %"] = (
@@ -262,7 +339,7 @@ if uploaded_file is not None:
 
 
             # ---------------------------------
-            # HANDLE ZERO / EMPTY SELLING PRICE
+            # HANDLE EMPTY SELLING PRICES
             # ---------------------------------
 
             edited_data.loc[
@@ -273,7 +350,7 @@ if uploaded_file is not None:
 
 
             # ---------------------------------
-            # SAVE CHANGES BUTTON
+            # SAVE CHANGES
             # ---------------------------------
 
             if st.button(
@@ -286,12 +363,12 @@ if uploaded_file is not None:
                 )
 
                 st.success(
-                    "Changes saved successfully."
+                    "Pricing information saved successfully."
                 )
 
 
             # ---------------------------------
-            # SHOW SAVED DATA
+            # SAVED PRICING
             # ---------------------------------
 
             if st.session_state.saved_pricing_data is not None:
@@ -308,6 +385,30 @@ if uploaded_file is not None:
                         "Buying Price":
                             st.column_config.NumberColumn(
                                 "Buying Price",
+                                format="KES %.2f"
+                            ),
+
+                        "Market Low":
+                            st.column_config.NumberColumn(
+                                "Market Low",
+                                format="KES %.2f"
+                            ),
+
+                        "Market High":
+                            st.column_config.NumberColumn(
+                                "Market High",
+                                format="KES %.2f"
+                            ),
+
+                        "Target Margin %":
+                            st.column_config.NumberColumn(
+                                "Target Margin %",
+                                format="%.2f%%"
+                            ),
+
+                        "Minimum Viable Price":
+                            st.column_config.NumberColumn(
+                                "Minimum Viable Price",
                                 format="KES %.2f"
                             ),
 
