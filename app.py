@@ -102,9 +102,10 @@ if uploaded_file is not None:
 
             pricing_data["Recommended Price"] = ""
 
-            pricing_data["Current Selling Price"] = ""
+            # This is now editable
+            pricing_data["Current Selling Price"] = None
 
-            pricing_data["Current Margin"] = ""
+            pricing_data["Current Margin"] = None
 
             pricing_data["Recommended Margin"] = ""
 
@@ -118,10 +119,76 @@ if uploaded_file is not None:
 
             st.subheader("Pricing Workspace")
 
-            st.dataframe(
+            st.write(
+                "Enter the current selling price for each product."
+            )
+
+            # Editable pricing table
+            edited_data = st.data_editor(
                 pricing_data,
                 use_container_width=True,
-                hide_index=True
+                hide_index=True,
+                disabled=[
+                    "Product",
+                    "Buying Price",
+                    "Market Range",
+                    "Recommended Price",
+                    "Current Margin",
+                    "Recommended Margin"
+                ],
+                column_config={
+                    "Current Selling Price": st.column_config.NumberColumn(
+                        "Current Selling Price",
+                        help="Enter the price at which the wholesaler currently sells this product.",
+                        min_value=0,
+                        step=1,
+                        format="KES %.2f"
+                    ),
+                    "Buying Price": st.column_config.NumberColumn(
+                        "Buying Price",
+                        format="KES %.2f"
+                    )
+                }
+            )
+
+            # -----------------------------
+            # CALCULATE CURRENT MARGIN
+            # -----------------------------
+
+            edited_data["Current Selling Price"] = pd.to_numeric(
+                edited_data["Current Selling Price"],
+                errors="coerce"
+            )
+
+            edited_data["Current Margin"] = (
+                edited_data["Current Selling Price"]
+                - edited_data["Buying Price"]
+            )
+
+            # -----------------------------
+            # SHOW UPDATED TABLE
+            # -----------------------------
+
+            st.subheader("Updated Pricing")
+
+            st.dataframe(
+                edited_data,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Buying Price": st.column_config.NumberColumn(
+                        "Buying Price",
+                        format="KES %.2f"
+                    ),
+                    "Current Selling Price": st.column_config.NumberColumn(
+                        "Current Selling Price",
+                        format="KES %.2f"
+                    ),
+                    "Current Margin": st.column_config.NumberColumn(
+                        "Current Margin",
+                        format="KES %.2f"
+                    )
+                }
             )
 
     except Exception as e:
