@@ -9,7 +9,11 @@ uploaded_file = st.file_uploader(
 )
 
 if uploaded_file is not None:
-    data = pd.read_excel(uploaded_file, header=None)
+   data = pd.read_excel(
+    uploaded_file,
+    sheet_name="Sheet1",
+    header=0
+)
 
     st.write("Excel file uploaded successfully.")
 
