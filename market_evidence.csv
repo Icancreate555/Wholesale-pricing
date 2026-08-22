@@ -1,1 +1,1 @@
-product,pack_size,location,price,unit,date,source,source_type,evidence_strength
+product,pack_size,location,price,unit,date,source,source_type,evidence_strength,geographic_relevance
