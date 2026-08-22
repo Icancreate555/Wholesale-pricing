@@ -1,6 +1,11 @@
 import streamlit as st
 import pandas as pd
 
+
+# ==========================================
+# PAGE SETUP
+# ==========================================
+
 st.set_page_config(
     page_title="Wholesale Pricing Workspace",
     layout="wide"
@@ -8,85 +13,13 @@ st.set_page_config(
 
 st.title("Wholesale Pricing Workspace")
 st.write(
-    "Upload your QuickBooks purchase file and review pricing decisions."
+    "Upload your QuickBooks purchase file and review your pricing."
 )
 
 
-# =========================================
-# SESSION STATE
-# =========================================
-
-if "saved_pricing_data" not in st.session_state:
-    st.session_state.saved_pricing_data = None
-
-
-# =========================================
-# PRICING STRATEGIES
-# =========================================
-
-strategy_margins = {
-    "Competitive": 0.07,
-    "Standard": 0.10,
-    "Higher Margin": 0.15,
-    "Clearance": 0.00
-}
-
-
-# =========================================
-# HELPER FUNCTION
-# =========================================
-
-def round_to_5(value):
-    """Round price to nearest KES 5."""
-
-    if pd.isna(value):
-        return None
-
-    return round(value / 5) * 5
-
-
-# =========================================
-# VELOCITY SIGNAL
-# =========================================
-
-def get_velocity_signal(velocity):
-
-    if velocity == "Fast":
-
-        return (
-            "Protect volume. "
-            "A competitive price may be more valuable "
-            "than maximising margin."
-        )
-
-    elif velocity == "Medium":
-
-        return (
-            "Balanced movement. "
-            "Maintain a reasonable balance between "
-            "margin and competitiveness."
-        )
-
-    elif velocity == "Slow":
-
-        return (
-            "Review stock movement. "
-            "Consider whether price, stock age, demand, "
-            "or purchasing decisions need attention."
-        )
-
-    else:
-
-        return (
-            "Velocity unknown. "
-            "Collect sales history before using velocity "
-            "as a pricing adjustment."
-        )
-
-
-# =========================================
-# FILE UPLOAD
-# =========================================
+# ==========================================
+# EXCEL UPLOAD
+# ==========================================
 
 uploaded_file = st.file_uploader(
     "Upload QuickBooks Excel file",
@@ -98,9 +31,9 @@ if uploaded_file is not None:
 
     try:
 
-        # =========================================
-        # READ QUICKBOOKS FILE
-        # =========================================
+        # ==========================================
+        # READ QUICKBOOKS SHEET
+        # ==========================================
 
         data = pd.read_excel(
             uploaded_file,
@@ -108,46 +41,31 @@ if uploaded_file is not None:
             header=0
         )
 
-
-        # =========================================
-        # CLEAN COLUMN NAMES
-        # =========================================
-
+        # Clean column names
         data.columns = (
             data.columns
             .astype(str)
-            .str.replace(
-                "\xa0",
-                " ",
-                regex=False
-            )
+            .str.replace("\xa0", " ", regex=False)
             .str.strip()
         )
 
-
-        # =========================================
-        # REMOVE EMPTY ROWS
-        # =========================================
-
-        data = data.dropna(
-            how="all"
-        ).copy()
+        # Remove completely empty rows
+        data = data.dropna(how="all").copy()
 
 
-        # =========================================
-        # REQUIRED COLUMNS
-        # =========================================
+        # ==========================================
+        # CHECK REQUIRED COLUMNS
+        # ==========================================
 
         required_columns = [
+            "Date",
+            "Num",
             "Memo",
             "Item",
             "Qty",
             "U/M",
-            "Cost Price",
-            "Date",
-            "Num"
+            "Cost Price"
         ]
-
 
         missing_columns = [
             column
@@ -155,701 +73,294 @@ if uploaded_file is not None:
             if column not in data.columns
         ]
 
-
         if missing_columns:
 
             st.error(
-                f"Missing columns: {missing_columns}"
+                "The QuickBooks file is missing these columns: "
+                + ", ".join(missing_columns)
+            )
+
+            st.stop()
+
+
+        # ==========================================
+        # CLEAN NUMERIC DATA
+        # ==========================================
+
+        data["Cost Price"] = pd.to_numeric(
+            data["Cost Price"],
+            errors="coerce"
+        )
+
+        data["Qty"] = pd.to_numeric(
+            data["Qty"],
+            errors="coerce"
+        )
+
+
+        # ==========================================
+        # REMOVE INVALID / SUMMARY ROWS
+        # ==========================================
+
+        data = data[
+            data["Memo"].notna()
+            & data["Cost Price"].notna()
+        ].copy()
+
+        data["Memo"] = (
+            data["Memo"]
+            .astype(str)
+            .str.strip()
+        )
+
+        data = data[
+            data["Memo"] != ""
+        ].copy()
+
+
+        # ==========================================
+        # CREATE PRICING WORKSPACE
+        # ==========================================
+
+        pricing_data = pd.DataFrame()
+
+        pricing_data["Product"] = data["Memo"]
+
+        pricing_data["Buying Price"] = data["Cost Price"]
+
+        pricing_data["Quantity"] = data["Qty"]
+
+        pricing_data["Unit"] = data["U/M"]
+
+        pricing_data["Purchase Date"] = data["Date"]
+
+        pricing_data["Market Range"] = "No evidence yet"
+
+        pricing_data["Current Selling Price"] = None
+
+        pricing_data["Current Margin"] = None
+
+
+        # ==========================================
+        # LOAD MARKET EVIDENCE
+        # ==========================================
+
+        try:
+
+            evidence = pd.read_csv(
+                "market_evidence.csv"
+            )
+
+            # Make sure the evidence file has the
+            # expected columns
+            evidence_columns = [
+                "product",
+                "pack_size",
+                "location",
+                "price",
+                "unit",
+                "date",
+                "source",
+                "source_type",
+                "evidence_strength"
+            ]
+
+            if all(
+                column in evidence.columns
+                for column in evidence_columns
+            ):
+
+                evidence["price"] = pd.to_numeric(
+                    evidence["price"],
+                    errors="coerce"
+                )
+
+                evidence = evidence.dropna(
+                    subset=["price"]
+                ).copy()
+
+
+                # ==========================================
+                # CREATE MARKET RANGES
+                # ==========================================
+
+                for index, row in pricing_data.iterrows():
+
+                    product_name = str(
+                        row["Product"]
+                    ).strip().upper()
+
+                    product_evidence = evidence[
+                        evidence["product"]
+                        .astype(str)
+                        .str.strip()
+                        .str.upper()
+                        == product_name
+                    ]
+
+                    if not product_evidence.empty:
+
+                        lowest_price = (
+                            product_evidence["price"]
+                            .min()
+                        )
+
+                        highest_price = (
+                            product_evidence["price"]
+                            .max()
+                        )
+
+                        pricing_data.at[
+                            index,
+                            "Market Range"
+                        ] = (
+                            f"KES {lowest_price:,.2f}"
+                            f" – "
+                            f"KES {highest_price:,.2f}"
+                        )
+
+
+        except FileNotFoundError:
+
+            # Evidence file does not exist yet.
+            # This is acceptable for V1.
+            pass
+
+
+        # ==========================================
+        # DISPLAY IMPORT RESULT
+        # ==========================================
+
+        st.success(
+            f"{len(pricing_data)} products imported successfully."
+        )
+
+
+        # ==========================================
+        # PRICING TABLE
+        # ==========================================
+
+        st.subheader("Pricing Workspace")
+
+        st.dataframe(
+            pricing_data,
+            use_container_width=True,
+            hide_index=True
+        )
+
+
+        # ==========================================
+        # OWNER PRICE ENTRY
+        # ==========================================
+
+        st.divider()
+
+        st.subheader("Enter Your Selling Price")
+
+        product_options = pricing_data[
+            "Product"
+        ].tolist()
+
+        selected_product = st.selectbox(
+            "Select a product",
+            product_options
+        )
+
+
+        # Get selected product
+        selected_index = pricing_data[
+            pricing_data["Product"]
+            == selected_product
+        ].index[0]
+
+        selected_row = pricing_data.loc[
+            selected_index
+        ]
+
+
+        # ==========================================
+        # SHOW PRODUCT INFORMATION
+        # ==========================================
+
+        st.write(
+            f"**Product:** {selected_product}"
+        )
+
+        st.write(
+            f"**Buying Price:** "
+            f"KES {selected_row['Buying Price']:,.2f}"
+        )
+
+        st.write(
+            f"**Market Evidence:** "
+            f"{selected_row['Market Range']}"
+        )
+
+
+        # ==========================================
+        # OWNER ENTERS SELLING PRICE
+        # ==========================================
+
+        selling_price = st.number_input(
+            "Your Current Selling Price (KES)",
+            min_value=0.0,
+            step=1.0,
+            format="%.2f"
+        )
+
+
+        # ==========================================
+        # CALCULATE MARGIN
+        # ==========================================
+
+        if selling_price > 0:
+
+            buying_price = float(
+                selected_row["Buying Price"]
+            )
+
+            profit = (
+                selling_price
+                - buying_price
+            )
+
+            margin = (
+                profit
+                / selling_price
+                * 100
             )
 
 
-        else:
-
-            # =========================================
-            # CONVERT NUMERIC DATA
-            # =========================================
-
-            data["Cost Price"] = pd.to_numeric(
-                data["Cost Price"],
-                errors="coerce"
-            )
-
-            data["Qty"] = pd.to_numeric(
-                data["Qty"],
-                errors="coerce"
-            )
-
-
-            # =========================================
-            # REMOVE INVALID PRODUCTS
-            # =========================================
-
-            data = data[
-                data["Memo"].notna()
-                & data["Cost Price"].notna()
-            ].copy()
-
-
-            data = data[
-                data["Memo"]
-                .astype(str)
-                .str.strip()
-                != ""
-            ].copy()
-
-
-            # =========================================
-            # CREATE PRICING WORKSPACE
-            # =========================================
-
-            pricing_data = pd.DataFrame()
-
-
-            pricing_data["Product"] = (
-                data["Memo"]
-                .astype(str)
-                .str.strip()
-            )
-
-
-            pricing_data["Buying Price"] = (
-                data["Cost Price"]
-            )
-
-
-            # -----------------------------------------
-            # MARKET
-            # -----------------------------------------
-
-            pricing_data["Market Low"] = None
-
-            pricing_data["Market High"] = None
-
-
-            # -----------------------------------------
-            # STRATEGY
-            # -----------------------------------------
-
-            pricing_data["Pricing Strategy"] = (
-                "Standard"
-            )
-
-
-            pricing_data["Target Margin %"] = (
-                10.0
-            )
-
-
-            # -----------------------------------------
-            # PRICING
-            # -----------------------------------------
-
-            pricing_data["Minimum Viable Price"] = None
-
-            pricing_data["Recommended Price"] = None
-
-
-            # -----------------------------------------
-            # CURRENT / APPROVED
-            # -----------------------------------------
-
-            pricing_data["Current Selling Price"] = None
-
-            pricing_data["Approved Selling Price"] = None
-
-
-            # -----------------------------------------
-            # PROFITABILITY
-            # -----------------------------------------
-
-            pricing_data["Current Margin"] = None
-
-            pricing_data["Current Margin %"] = None
-
-
-            # -----------------------------------------
-            # VELOCITY
-            # -----------------------------------------
-
-            pricing_data["Sales Velocity"] = (
-                "Unknown"
-            )
-
-            pricing_data["Velocity Signal"] = (
-                "Velocity unknown."
-            )
-
-
-            # -----------------------------------------
-            # FUTURE AI
-            # -----------------------------------------
-
-            pricing_data["AI Competitiveness"] = (
-                "Pending"
-            )
-
-            pricing_data["AI Confidence"] = (
-                "Pending"
-            )
-
-
-            # -----------------------------------------
-            # DECISION
-            # -----------------------------------------
-
-            pricing_data["Pricing Status"] = (
-                "Pending market data"
-            )
-
-            pricing_data["Pricing Explanation"] = (
-                "Enter market prices to generate "
-                "a recommendation."
-            )
-
-
-            # =========================================
-            # SUCCESS
-            # =========================================
-
-            st.success(
-                f"{len(pricing_data)} products imported."
-            )
-
-
-            # =========================================
-            # PRICING ENGINE
-            # =========================================
-
-            st.subheader(
-                "Pricing Decision Engine"
+            st.write(
+                f"**Profit per selling unit:** "
+                f"KES {profit:,.2f}"
             )
 
             st.write(
-                "Enter market information, choose the "
-                "pricing strategy, and classify sales "
-                "velocity where known."
+                f"**Current Margin:** "
+                f"{margin:.2f}%"
             )
 
 
-            # =========================================
-            # EDITABLE TABLE
-            # =========================================
+            # ==========================================
+            # OWNER DECISION
+            # ==========================================
 
-            edited_data = st.data_editor(
-
-                pricing_data,
-
-                use_container_width=True,
-
-                hide_index=True,
-
-                disabled=[
-
-                    "Product",
-
-                    "Buying Price",
-
-                    "Target Margin %",
-
-                    "Minimum Viable Price",
-
-                    "Recommended Price",
-
-                    "Current Margin",
-
-                    "Current Margin %",
-
-                    "Velocity Signal",
-
-                    "AI Competitiveness",
-
-                    "AI Confidence",
-
-                    "Pricing Status",
-
-                    "Pricing Explanation"
-                ],
-
-                column_config={
-
-                    "Buying Price":
-                        st.column_config.NumberColumn(
-                            "Buying Price",
-                            format="KES %.2f"
-                        ),
-
-                    "Market Low":
-                        st.column_config.NumberColumn(
-                            "Market Low",
-                            min_value=0,
-                            step=1,
-                            format="KES %.2f"
-                        ),
-
-                    "Market High":
-                        st.column_config.NumberColumn(
-                            "Market High",
-                            min_value=0,
-                            step=1,
-                            format="KES %.2f"
-                        ),
-
-                    "Pricing Strategy":
-                        st.column_config.SelectboxColumn(
-                            "Pricing Strategy",
-                            options=[
-                                "Competitive",
-                                "Standard",
-                                "Higher Margin",
-                                "Clearance"
-                            ],
-                            required=True
-                        ),
-
-                    "Target Margin %":
-                        st.column_config.NumberColumn(
-                            "Target Margin %",
-                            format="%.2f%%"
-                        ),
-
-                    "Minimum Viable Price":
-                        st.column_config.NumberColumn(
-                            "Minimum Viable Price",
-                            format="KES %.2f"
-                        ),
-
-                    "Recommended Price":
-                        st.column_config.NumberColumn(
-                            "Recommended Price",
-                            format="KES %.2f"
-                        ),
-
-                    "Current Selling Price":
-                        st.column_config.NumberColumn(
-                            "Current Selling Price",
-                            min_value=0,
-                            step=1,
-                            format="KES %.2f"
-                        ),
-
-                    "Approved Selling Price":
-                        st.column_config.NumberColumn(
-                            "Approved Selling Price",
-                            min_value=0,
-                            step=1,
-                            format="KES %.2f"
-                        ),
-
-                    "Current Margin":
-                        st.column_config.NumberColumn(
-                            "Current Margin",
-                            format="KES %.2f"
-                        ),
-
-                    "Current Margin %":
-                        st.column_config.NumberColumn(
-                            "Current Margin %",
-                            format="%.2f%%"
-                        ),
-
-                    "Sales Velocity":
-                        st.column_config.SelectboxColumn(
-                            "Sales Velocity",
-                            options=[
-                                "Unknown",
-                                "Fast",
-                                "Medium",
-                                "Slow"
-                            ],
-                            required=True
-                        )
-                }
+            st.info(
+                "The selling price is your decision. "
+                "The system provides information and "
+                "calculations to support your judgement."
             )
 
-
-            # =========================================
-            # TARGET MARGIN
-            # =========================================
-
-            edited_data["Target Margin %"] = (
-
-                edited_data[
-                    "Pricing Strategy"
-                ]
-                .map(strategy_margins)
-                * 100
-
-            )
-
-
-            # =========================================
-            # TARGET MARGIN DECIMAL
-            # =========================================
-
-            target_margin_decimal = (
-                edited_data["Target Margin %"]
-                / 100
-            )
-
-
-            # =========================================
-            # MINIMUM VIABLE PRICE
-            # =========================================
-
-            edited_data["Minimum Viable Price"] = (
-
-                edited_data["Buying Price"]
-                /
-                (
-                    1
-                    -
-                    target_margin_decimal
-                )
-
-            )
-
-
-            # =========================================
-            # RECOMMENDED PRICE
-            # =========================================
-
-            for index, row in edited_data.iterrows():
-
-                market_low = pd.to_numeric(
-                    row["Market Low"],
-                    errors="coerce"
-                )
-
-                market_high = pd.to_numeric(
-                    row["Market High"],
-                    errors="coerce"
-                )
-
-                minimum_price = row[
-                    "Minimum Viable Price"
-                ]
-
-
-                # -------------------------------------
-                # NO MARKET DATA
-                # -------------------------------------
-
-                if (
-                    pd.isna(market_low)
-                    or pd.isna(market_high)
-                ):
-
-                    edited_data.at[
-                        index,
-                        "Recommended Price"
-                    ] = None
-
-                    edited_data.at[
-                        index,
-                        "Pricing Status"
-                    ] = "Pending market data"
-
-                    edited_data.at[
-                        index,
-                        "Pricing Explanation"
-                    ] = (
-                        "Enter Market Low and Market High."
-                    )
-
-                    continue
-
-
-                # -------------------------------------
-                # INVALID MARKET RANGE
-                # -------------------------------------
-
-                if market_low > market_high:
-
-                    edited_data.at[
-                        index,
-                        "Recommended Price"
-                    ] = None
-
-                    edited_data.at[
-                        index,
-                        "Pricing Status"
-                    ] = "Invalid market range"
-
-                    edited_data.at[
-                        index,
-                        "Pricing Explanation"
-                    ] = (
-                        "Market Low cannot be greater "
-                        "than Market High."
-                    )
-
-                    continue
-
-
-                # -------------------------------------
-                # TARGET ACHIEVABLE
-                # -------------------------------------
-
-                if minimum_price <= market_high:
-
-                    if minimum_price < market_low:
-
-                        recommended_price = market_low
-
-                    else:
-
-                        recommended_price = minimum_price
-
-
-                    recommended_price = round_to_5(
-                        recommended_price
-                    )
-
-
-                    edited_data.at[
-                        index,
-                        "Recommended Price"
-                    ] = recommended_price
-
-
-                    edited_data.at[
-                        index,
-                        "Pricing Status"
-                    ] = "Target achievable"
-
-
-                    edited_data.at[
-                        index,
-                        "Pricing Explanation"
-                    ] = (
-                        "Target margin can be achieved "
-                        "within the observed market range."
-                    )
-
-
-                # -------------------------------------
-                # TARGET NOT ACHIEVABLE
-                # -------------------------------------
-
-                else:
-
-                    edited_data.at[
-                        index,
-                        "Recommended Price"
-                    ] = None
-
-
-                    edited_data.at[
-                        index,
-                        "Pricing Status"
-                    ] = "Target exceeds market"
-
-
-                    edited_data.at[
-                        index,
-                        "Pricing Explanation"
-                    ] = (
-                        "The minimum price required to "
-                        "achieve the target margin is above "
-                        "the observed market ceiling."
-                    )
-
-
-            # =========================================
-            # VELOCITY SIGNAL
-            # =========================================
-
-            edited_data["Velocity Signal"] = (
-
-                edited_data["Sales Velocity"]
-                .apply(get_velocity_signal)
-
-            )
-
-
-            # =========================================
-            # CURRENT SELLING PRICE
-            # =========================================
-
-            edited_data[
-                "Current Selling Price"
-            ] = pd.to_numeric(
-
-                edited_data[
-                    "Current Selling Price"
-                ],
-
-                errors="coerce"
-            )
-
-
-            # =========================================
-            # CURRENT MARGIN
-            # =========================================
-
-            edited_data[
-                "Current Margin"
-            ] = (
-
-                edited_data[
-                    "Current Selling Price"
-                ]
-
-                -
-
-                edited_data[
-                    "Buying Price"
-                ]
-
-            )
-
-
-            # =========================================
-            # CURRENT MARGIN %
-            # =========================================
-
-            edited_data[
-                "Current Margin %"
-            ] = (
-
-                edited_data[
-                    "Current Margin"
-                ]
-
-                /
-
-                edited_data[
-                    "Current Selling Price"
-                ]
-
-            ) * 100
-
-
-            # =========================================
-            # HANDLE EMPTY PRICE
-            # =========================================
-
-            edited_data.loc[
-
-                edited_data[
-                    "Current Selling Price"
-                ].isna()
-
-                |
-
-                (
-                    edited_data[
-                        "Current Selling Price"
-                    ]
-                    == 0
-                ),
-
-                "Current Margin %"
-
-            ] = None
-
-
-            # =========================================
-            # SAVE
-            # =========================================
 
             if st.button(
-                "Save Pricing Decisions",
-                type="primary"
+                "Save Selling Price"
             ):
-
-                st.session_state.saved_pricing_data = (
-                    edited_data.copy()
-                )
 
                 st.success(
-                    "Pricing decisions saved for this session."
-                )
-
-
-            # =========================================
-            # DISPLAY SAVED DATA
-            # =========================================
-
-            if (
-                st.session_state.saved_pricing_data
-                is not None
-            ):
-
-                st.subheader(
-                    "Pricing Decisions"
-                )
-
-                st.dataframe(
-
-                    st.session_state.saved_pricing_data,
-
-                    use_container_width=True,
-
-                    hide_index=True,
-
-                    column_config={
-
-                        "Buying Price":
-                            st.column_config.NumberColumn(
-                                "Buying Price",
-                                format="KES %.2f"
-                            ),
-
-                        "Market Low":
-                            st.column_config.NumberColumn(
-                                "Market Low",
-                                format="KES %.2f"
-                            ),
-
-                        "Market High":
-                            st.column_config.NumberColumn(
-                                "Market High",
-                                format="KES %.2f"
-                            ),
-
-                        "Target Margin %":
-                            st.column_config.NumberColumn(
-                                "Target Margin %",
-                                format="%.2f%%"
-                            ),
-
-                        "Minimum Viable Price":
-                            st.column_config.NumberColumn(
-                                "Minimum Viable Price",
-                                format="KES %.2f"
-                            ),
-
-                        "Recommended Price":
-                            st.column_config.NumberColumn(
-                                "Recommended Price",
-                                format="KES %.2f"
-                            ),
-
-                        "Current Selling Price":
-                            st.column_config.NumberColumn(
-                                "Current Selling Price",
-                                format="KES %.2f"
-                            ),
-
-                        "Approved Selling Price":
-                            st.column_config.NumberColumn(
-                                "Approved Selling Price",
-                                format="KES %.2f"
-                            ),
-
-                        "Current Margin":
-                            st.column_config.NumberColumn(
-                                "Current Margin",
-                                format="KES %.2f"
-                            ),
-
-                        "Current Margin %":
-                            st.column_config.NumberColumn(
-                                "Current Margin %",
-                                format="%.2f%%"
-                            )
-                    }
+                    f"Selling price of "
+                    f"KES {selling_price:,.2f} "
+                    f"recorded for {selected_product}."
                 )
 
 
