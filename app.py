@@ -1408,7 +1408,350 @@ else:
         hide_index=True
 
     )
+# ============================================================
+# CEO PRICING DECISION BOARD
+# ============================================================
 
+st.divider()
+
+st.subheader("8. CEO Pricing Decision Board")
+
+st.caption(
+    "A quick view of where attention is needed today."
+)
+
+
+if "pricing_data" in st.session_state:
+
+    pricing_data = st.session_state["pricing_data"].copy()
+
+
+    # --------------------------------------------------------
+    # ANALYSE TODAY'S PRODUCTS
+    # --------------------------------------------------------
+
+    decision_rows = []
+
+
+    for index, row in pricing_data.iterrows():
+
+        product = row["Product"]
+
+        buying_price = float(
+            row["Buying Price"]
+        )
+
+        quantity = float(
+            row["Quantity"]
+        )
+
+
+        intelligence = market_intelligence(
+            product,
+            market_evidence
+        )
+
+
+        movement = movement_class(
+            quantity
+        )
+
+
+        # ----------------------------------------------------
+        # MARKET POSITION
+        # ----------------------------------------------------
+
+        current_price = row[
+            "Current Selling Price"
+        ]
+
+
+        if pd.notna(current_price):
+
+            current_price = float(
+                current_price
+            )
+
+        else:
+
+            current_price = None
+
+
+        if intelligence["median"] is not None:
+
+            market_median = float(
+                intelligence["median"]
+            )
+
+
+            if current_price is None:
+
+                position = "Not priced"
+
+            elif current_price < market_median * 0.97:
+
+                position = "Below market"
+
+            elif current_price > market_median * 1.03:
+
+                position = "Above market"
+
+            else:
+
+                position = "Around market"
+
+
+        else:
+
+            market_median = None
+
+            position = "No market evidence"
+
+
+        # ----------------------------------------------------
+        # MARGIN
+        # ----------------------------------------------------
+
+        if current_price is not None:
+
+            margin = calculate_margin(
+                buying_price,
+                current_price
+            )
+
+        else:
+
+            margin = None
+
+
+        # ----------------------------------------------------
+        # ATTENTION
+        # ----------------------------------------------------
+
+        attention = "Normal"
+
+
+        if intelligence["median"] is None:
+
+            attention = "Research needed"
+
+        elif margin is not None and margin < 3:
+
+            attention = "Thin margin"
+
+        elif position == "Above market":
+
+            attention = "Check competitiveness"
+
+        elif movement == "Fast" and position == "Below market":
+
+            attention = "Review price opportunity"
+
+
+        decision_rows.append({
+
+            "Product": product,
+
+            "Buying Price": buying_price,
+
+            "Market Median": market_median,
+
+            "Selling Price": current_price,
+
+            "Margin %": margin,
+
+            "Movement": movement,
+
+            "Market Position": position,
+
+            "Attention": attention
+
+        })
+
+
+    decision_board = pd.DataFrame(
+        decision_rows
+    )
+
+
+    # --------------------------------------------------------
+    # EXECUTIVE METRICS
+    # --------------------------------------------------------
+
+    total_products = len(
+        decision_board
+    )
+
+
+    evidence_available = len(
+        decision_board[
+            decision_board[
+                "Market Median"
+            ].notna()
+        ]
+    )
+
+
+    research_needed = (
+        total_products
+        -
+        evidence_available
+    )
+
+
+    priced_products = len(
+        decision_board[
+            decision_board[
+                "Selling Price"
+            ].notna()
+        ]
+    )
+
+
+    thin_margin = len(
+        decision_board[
+            decision_board[
+                "Margin %"
+            ].notna()
+            &
+            (
+                decision_board[
+                    "Margin %"
+                ] < 3
+            )
+        ]
+    )
+
+
+    c1, c2, c3, c4 = st.columns(4)
+
+
+    with c1:
+
+        st.metric(
+            "Products Today",
+            total_products
+        )
+
+
+    with c2:
+
+        st.metric(
+            "Market Evidence",
+            evidence_available
+        )
+
+
+    with c3:
+
+        st.metric(
+            "Research Needed",
+            research_needed
+        )
+
+
+    with c4:
+
+        st.metric(
+            "Thin Margins",
+            thin_margin
+        )
+
+
+    # --------------------------------------------------------
+    # ATTENTION TABLE
+    # --------------------------------------------------------
+
+    st.markdown(
+        "### Products Requiring Attention"
+    )
+
+
+    attention_board = decision_board[
+        decision_board[
+            "Attention"
+        ] != "Normal"
+    ].copy()
+
+
+    if attention_board.empty:
+
+        st.success(
+            "No immediate pricing issues detected."
+        )
+
+    else:
+
+        st.dataframe(
+
+            attention_board,
+
+            use_container_width=True,
+
+            hide_index=True
+
+        )
+
+
+    # --------------------------------------------------------
+    # FULL DECISION BOARD
+    # --------------------------------------------------------
+
+    st.markdown(
+        "### Today's Pricing View"
+    )
+
+
+    st.dataframe(
+
+        decision_board,
+
+        use_container_width=True,
+
+        hide_index=True
+
+    )
+
+
+    # --------------------------------------------------------
+    # STRATEGIC MESSAGE
+    # --------------------------------------------------------
+
+    if research_needed > 0:
+
+        st.warning(
+
+            f"{research_needed} product(s) need "
+            "fresh market evidence before the system "
+            "can make a strong market-based recommendation."
+
+        )
+
+    elif thin_margin > 0:
+
+        st.warning(
+
+            f"{thin_margin} product(s) have margins "
+            "below 3%. Review these before accepting "
+            "current prices."
+
+        )
+
+    else:
+
+        st.success(
+
+            "Today's pricing portfolio is in a healthy "
+            "decision state based on the evidence currently available."
+
+        )
+
+else:
+
+    st.info(
+        "Upload today's purchase file to activate "
+        "the CEO Pricing Decision Board."
+    )
 
 # ============================================================
 # FOOTER
