@@ -1,0 +1,9 @@
+source_name,location,source_category,source_type,priority,url,active
+KAMIS,Karatina,Official Market Data,OFFICIAL,1,https://kamis.kilimo.go.ke/,TRUE
+KAMIS,Nyeri Town,Official Market Data,OFFICIAL,1,https://kamis.kilimo.go.ke/,TRUE
+Maguna Andu,Karatina,Local Wholesaler,WHOLESALER,2,,TRUE
+Kanini,Karatina,Local Wholesaler,WHOLESALER,2,,TRUE
+Cumulus,Nyeri Town,Local Wholesaler,WHOLESALER,2,,TRUE
+Sharuu Traders,Nyeri Town,Local Wholesaler,WHOLESALER,2,,TRUE
+Gilanis,Nyeri Town,Local Wholesaler,WHOLESALER,2,https://gilanis.co.ke/,TRUE
+JEDITO,Nyeri,Local Wholesaler,WHOLESALER,2,,TRUE
