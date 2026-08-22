@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import os
+from datetime import datetime, date
 
 
 # ============================================================
@@ -8,15 +9,28 @@ import os
 # ============================================================
 
 st.set_page_config(
-    page_title="Wholesale Pricing Workspace",
+    page_title="Wholesale Pricing Intelligence",
     layout="wide"
 )
 
 st.title("Wholesale Pricing Workspace")
 
 st.caption(
-    "Your purchase data, market evidence and pricing decision in one place."
+    "Market intelligence + movement + pricing strategy "
+    "for a small wholesale business."
 )
+
+
+# ============================================================
+# CONSTANTS
+# ============================================================
+
+EVIDENCE_FILE = "market_evidence.csv"
+
+LOCAL_GEOGRAPHIES = [
+    "CORE LOCAL",
+    "KARATINA-NYERI CORRIDOR"
+]
 
 
 # ============================================================
@@ -24,13 +38,15 @@ st.caption(
 # ============================================================
 
 def clean_text(value):
+
     if pd.isna(value):
         return ""
 
-    return str(value).replace(
-        "\xa0",
-        " "
-    ).strip()
+    return (
+        str(value)
+        .replace("\xa0", " ")
+        .strip()
+    )
 
 
 def normalize_text(value):
@@ -51,41 +67,53 @@ def calculate_margin(
         return None
 
     return (
-        (
-            selling_price
-            - buying_price
-        )
-        /
-        selling_price
+        (selling_price - buying_price)
+        / selling_price
     ) * 100
 
 
+def calculate_profit(
+    buying_price,
+    selling_price
+):
+
+    return selling_price - buying_price
+
+
 # ============================================================
+# PHASE 1
 # EVIDENCE DATABASE
 # ============================================================
 
+def empty_evidence_dataframe():
+
+    return pd.DataFrame(columns=[
+
+        "product",
+        "pack_size",
+        "location",
+        "price",
+        "unit",
+        "date",
+        "source",
+        "source_type",
+        "evidence_strength",
+        "geographic_relevance"
+
+    ])
+
+
 def load_evidence():
 
-    file_name = "market_evidence.csv"
+    if not os.path.exists(EVIDENCE_FILE):
 
-    if not os.path.exists(file_name):
-
-        return pd.DataFrame()
-
+        return empty_evidence_dataframe()
 
     try:
 
         evidence = pd.read_csv(
-            file_name
+            EVIDENCE_FILE
         )
-
-
-        evidence.columns = (
-            evidence.columns
-            .astype(str)
-            .str.strip()
-        )
-
 
         required_columns = [
 
@@ -102,39 +130,42 @@ def load_evidence():
 
         ]
 
-
         for column in required_columns:
 
             if column not in evidence.columns:
 
                 evidence[column] = ""
 
-
         evidence["price"] = pd.to_numeric(
             evidence["price"],
             errors="coerce"
         )
 
-
         evidence = evidence.dropna(
             subset=["price"]
         ).copy()
 
-
         return evidence
-
 
     except Exception as error:
 
         st.warning(
-            f"Evidence database could not be loaded: {error}"
+            f"Market evidence could not be loaded: {error}"
         )
 
-        return pd.DataFrame()
+        return empty_evidence_dataframe()
+
+
+def save_evidence(evidence):
+
+    evidence.to_csv(
+        EVIDENCE_FILE,
+        index=False
+    )
 
 
 # ============================================================
-# SOURCE QUALITY
+# EVIDENCE SCORING
 # ============================================================
 
 def source_score(source_type):
@@ -143,36 +174,25 @@ def source_score(source_type):
         source_type
     )
 
+    scores = {
 
-    if source_type in [
-        "OFFICIAL",
-        "WHOLESALER"
-    ]:
+        "WHOLESALER": 3,
 
-        return 3
+        "OFFICIAL": 3,
 
+        "SUPPLIER": 2,
 
-    if source_type == "SUPPLIER":
+        "COMMERCIAL": 1,
 
-        return 2
+        "RETAIL": 0
 
+    }
 
-    if source_type == "COMMERCIAL":
+    return scores.get(
+        source_type,
+        0
+    )
 
-        return 1
-
-
-    if source_type == "RETAIL":
-
-        return 0
-
-
-    return 0
-
-
-# ============================================================
-# GEOGRAPHIC RELEVANCE
-# ============================================================
 
 def geography_score(
     location,
@@ -187,21 +207,12 @@ def geography_score(
         relevance
     )
 
-
-    if relevance == "CORE LOCAL":
-
-        return 3
-
-
-    if relevance == "KARATINA-NYERI CORRIDOR":
+    if relevance in [
+        "CORE LOCAL",
+        "KARATINA-NYERI CORRIDOR"
+    ]:
 
         return 3
-
-
-    if relevance == "WIDER / OTHER":
-
-        return 1
-
 
     if (
         "KARATINA" in location
@@ -210,67 +221,70 @@ def geography_score(
 
         return 3
 
+    if relevance == "WIDER / OTHER":
+
+        return 1
 
     return 0
 
 
-# ============================================================
-# EVIDENCE QUALITY
-# ============================================================
+def strength_score(
+    evidence_strength
+):
+
+    strength = normalize_text(
+        evidence_strength
+    )
+
+    scores = {
+
+        "HIGH": 3,
+
+        "MEDIUM": 2,
+
+        "LOW": 1
+
+    }
+
+    return scores.get(
+        strength,
+        0
+    )
+
 
 def evidence_quality(row):
 
-    score = 0
-
-
-    strength = normalize_text(
-        row.get(
-            "evidence_strength",
-            ""
+    return (
+        strength_score(
+            row.get(
+                "evidence_strength",
+                ""
+            )
+        )
+        +
+        source_score(
+            row.get(
+                "source_type",
+                ""
+            )
+        )
+        +
+        geography_score(
+            row.get(
+                "location",
+                ""
+            ),
+            row.get(
+                "geographic_relevance",
+                ""
+            )
         )
     )
-
-
-    if strength == "HIGH":
-
-        score += 3
-
-
-    elif strength == "MEDIUM":
-
-        score += 2
-
-
-    elif strength == "LOW":
-
-        score += 1
-
-
-    score += source_score(
-        row.get(
-            "source_type",
-            ""
-        )
-    )
-
-
-    score += geography_score(
-        row.get(
-            "location",
-            ""
-        ),
-        row.get(
-            "geographic_relevance",
-            ""
-        )
-    )
-
-
-    return score
 
 
 # ============================================================
-# PRODUCT EVIDENCE
+# PHASE 2
+# MARKET INTELLIGENCE ENGINE
 # ============================================================
 
 def get_product_evidence(
@@ -278,32 +292,35 @@ def get_product_evidence(
     evidence
 ):
 
+    empty_result = {
+
+        "local": pd.DataFrame(),
+
+        "broader": pd.DataFrame(),
+
+        "low": None,
+
+        "high": None,
+
+        "median": None,
+
+        "spread": None,
+
+        "count": 0,
+
+        "confidence": "None",
+
+        "trend": "Unknown",
+
+        "status": "Awaiting evidence",
+
+        "fresh": False
+
+    }
+
     if evidence.empty:
 
-        return {
-
-            "local": pd.DataFrame(),
-
-            "broader": pd.DataFrame(),
-
-            "range": (
-                "Awaiting verified "
-                "local evidence"
-            ),
-
-            "status": "Awaiting evidence",
-
-            "low": None,
-
-            "high": None,
-
-            "median": None,
-
-            "spread": None,
-
-            "count": 0
-
-        }
+        return empty_result
 
 
     product_key = normalize_text(
@@ -320,30 +337,7 @@ def get_product_evidence(
 
     if matches.empty:
 
-        return {
-
-            "local": pd.DataFrame(),
-
-            "broader": pd.DataFrame(),
-
-            "range": (
-                "Awaiting verified "
-                "local evidence"
-            ),
-
-            "status": "Awaiting evidence",
-
-            "low": None,
-
-            "high": None,
-
-            "median": None,
-
-            "spread": None,
-
-            "count": 0
-
-        }
+        return empty_result
 
 
     matches["quality_score"] = (
@@ -354,149 +348,176 @@ def get_product_evidence(
     )
 
 
-    # ========================================================
-    # LOCAL EVIDENCE
-    # ========================================================
+    # --------------------------------------------------------
+    # DATE
+    # --------------------------------------------------------
+
+    matches["parsed_date"] = pd.to_datetime(
+        matches["date"],
+        errors="coerce"
+    )
+
+
+    # --------------------------------------------------------
+    # LOCAL
+    # --------------------------------------------------------
 
     local = matches[
-        (
-            matches[
-                "geographic_relevance"
-            ]
-            .apply(normalize_text)
-            .isin(
-                [
-                    "CORE LOCAL",
-                    "KARATINA-NYERI CORRIDOR"
-                ]
-            )
-        )
-        &
-        (
-            matches[
-                "quality_score"
-            ] >= 5
+        matches[
+            "geographic_relevance"
+        ]
+        .apply(normalize_text)
+        .isin(
+            LOCAL_GEOGRAPHIES
         )
     ].copy()
 
 
-    # ========================================================
-    # BROADER EVIDENCE
-    # ========================================================
+    local = local[
+        local["quality_score"] >= 5
+    ].copy()
+
+
+    # --------------------------------------------------------
+    # BROADER
+    # --------------------------------------------------------
 
     broader = matches[
-        matches[
-            "quality_score"
-        ] >= 4
+        matches["quality_score"] >= 4
     ].copy()
 
 
-    # ========================================================
-    # LOCAL MARKET STATISTICS
-    # ========================================================
+    working = local.copy()
 
-    if len(local) >= 2:
-
-        lowest = local[
-            "price"
-        ].min()
+    status = "Local evidence available"
 
 
-        highest = local[
-            "price"
-        ].max()
+    if len(working) < 2:
+
+        working = broader.copy()
+
+        status = "Broader reference only"
 
 
-        median = local[
-            "price"
-        ].median()
+    if len(working) < 2:
+
+        empty_result[
+            "local"
+        ] = local
+
+        empty_result[
+            "broader"
+        ] = broader
+
+        empty_result[
+            "status"
+        ] = "Insufficient evidence"
+
+        return empty_result
 
 
-        spread = (
-            highest
-            - lowest
-        )
+    # --------------------------------------------------------
+    # STATISTICS
+    # --------------------------------------------------------
+
+    low = working["price"].min()
+
+    high = working["price"].max()
+
+    median = working["price"].median()
+
+    spread = high - low
+
+    count = len(working)
 
 
-        return {
+    # --------------------------------------------------------
+    # FRESHNESS
+    # --------------------------------------------------------
 
-            "local": local,
-
-            "broader": broader,
-
-            "range": (
-                f"KES {lowest:,.2f} – "
-                f"KES {highest:,.2f}"
-            ),
-
-            "status":
-                "Local evidence available",
-
-            "low": lowest,
-
-            "high": highest,
-
-            "median": median,
-
-            "spread": spread,
-
-            "count": len(local)
-
-        }
+    valid_dates = working[
+        "parsed_date"
+    ].dropna()
 
 
-    # ========================================================
-    # BROADER REFERENCE
-    # ========================================================
+    fresh = False
 
-    if len(broader) >= 2:
+    if not valid_dates.empty:
 
-        lowest = broader[
-            "price"
-        ].min()
+        latest_date = valid_dates.max()
 
+        days_old = (
+            pd.Timestamp.today()
+            - latest_date
+        ).days
 
-        highest = broader[
-            "price"
-        ].max()
+        fresh = days_old <= 7
 
 
-        median = broader[
-            "price"
-        ].median()
+    # --------------------------------------------------------
+    # CONFIDENCE
+    # --------------------------------------------------------
+
+    if (
+        count >= 5
+        and fresh
+        and status == "Local evidence available"
+    ):
+
+        confidence = "High"
+
+    elif (
+        count >= 3
+        and status == "Local evidence available"
+    ):
+
+        confidence = "Medium"
+
+    elif count >= 2:
+
+        confidence = "Low"
+
+    else:
+
+        confidence = "None"
 
 
-        spread = (
-            highest
-            - lowest
-        )
+    # --------------------------------------------------------
+    # TREND
+    # --------------------------------------------------------
+
+    trend = "Stable / Unknown"
 
 
-        return {
+    dated = working.dropna(
+        subset=["parsed_date"]
+    ).sort_values(
+        "parsed_date"
+    )
 
-            "local": local,
 
-            "broader": broader,
+    if len(dated) >= 3:
 
-            "range": (
-                f"KES {lowest:,.2f} – "
-                f"KES {highest:,.2f}"
-            ),
+        recent = dated.tail(
+            max(1, len(dated) // 2)
+        )["price"].mean()
 
-            "status":
-                "Broader reference only",
+        older = dated.head(
+            max(1, len(dated) // 2)
+        )["price"].mean()
 
-            "low": lowest,
 
-            "high": highest,
+        if recent > older * 1.02:
 
-            "median": median,
+            trend = "Rising"
 
-            "spread": spread,
+        elif recent < older * 0.98:
 
-            "count": len(broader)
+            trend = "Falling"
 
-        }
+        else:
+
+            trend = "Stable"
 
 
     return {
@@ -505,47 +526,387 @@ def get_product_evidence(
 
         "broader": broader,
 
-        "range":
-            "Insufficient verified evidence",
+        "low": low,
 
-        "status":
-            "Insufficient evidence",
+        "high": high,
 
-        "low": None,
+        "median": median,
 
-        "high": None,
+        "spread": spread,
 
-        "median": None,
+        "count": count,
 
-        "spread": None,
+        "confidence": confidence,
 
-        "count": len(matches)
+        "trend": trend,
+
+        "status": status,
+
+        "fresh": fresh
 
     }
 
 
 # ============================================================
-# LOAD MARKET EVIDENCE
+# PHASE 3
+# MARKET AGENT WATCHLIST
+# ============================================================
+
+def build_watchlist(
+    pricing_data,
+    evidence
+):
+
+    watchlist = []
+
+    for product in pricing_data[
+        "Product"
+    ].dropna().unique():
+
+        intelligence = get_product_evidence(
+            product,
+            evidence
+        )
+
+        needs_refresh = (
+
+            intelligence["count"] < 3
+            or not intelligence["fresh"]
+            or intelligence["confidence"]
+            in ["Low", "None"]
+
+        )
+
+        if needs_refresh:
+
+            watchlist.append({
+
+                "Product": product,
+
+                "Reason":
+                    "Fresh local evidence needed"
+
+            })
+
+
+    return pd.DataFrame(
+        watchlist
+    )
+
+
+# ============================================================
+# PHASE 4
+# MOVEMENT INTELLIGENCE
+# ============================================================
+
+def determine_movement(
+    quantity,
+    historical_quantities=None
+):
+
+    if (
+        historical_quantities is None
+        or len(historical_quantities) < 3
+    ):
+
+        if quantity >= 50:
+
+            return "Fast"
+
+        elif quantity >= 10:
+
+            return "Medium"
+
+        return "Slow"
+
+
+    average = pd.Series(
+        historical_quantities
+    ).mean()
+
+
+    if quantity >= average * 1.5:
+
+        return "Fast"
+
+    if quantity <= average * 0.5:
+
+        return "Slow"
+
+    return "Medium"
+
+
+# ============================================================
+# PHASE 4
+# COMPETITIVE PRESSURE
+# ============================================================
+
+def competitive_pressure(
+    intelligence
+):
+
+    if intelligence["count"] < 2:
+
+        return "Unknown"
+
+
+    spread = intelligence["spread"]
+
+    median = intelligence["median"]
+
+
+    if median <= 0:
+
+        return "Unknown"
+
+
+    spread_percent = (
+        spread / median
+    ) * 100
+
+
+    if spread_percent <= 4:
+
+        return "High"
+
+
+    if spread_percent <= 8:
+
+        return "Medium"
+
+
+    return "Low"
+
+
+# ============================================================
+# PRICE POSITION
+# ============================================================
+
+def price_position(
+    price,
+    low,
+    high
+):
+
+    if (
+        low is None
+        or high is None
+        or high <= low
+    ):
+
+        return None
+
+
+    return (
+        (price - low)
+        /
+        (high - low)
+    ) * 100
+
+
+# ============================================================
+# PHASE 5
+# PRICING STRATEGY
+# ============================================================
+
+def pricing_strategy(
+    buying_price,
+    intelligence,
+    movement
+):
+
+    low = intelligence["low"]
+
+    high = intelligence["high"]
+
+    median = intelligence["median"]
+
+
+    # --------------------------------------------------------
+    # NO MARKET EVIDENCE
+    # --------------------------------------------------------
+
+    if (
+        low is None
+        or high is None
+    ):
+
+        base_margin = 5
+
+        balanced = (
+            buying_price
+            /
+            (1 - base_margin / 100)
+        )
+
+        return {
+
+            "value": round(
+                balanced * 0.98,
+                2
+            ),
+
+            "balanced": round(
+                balanced,
+                2
+            ),
+
+            "margin": round(
+                balanced * 1.02,
+                2
+            ),
+
+            "recommended":
+                round(
+                    balanced,
+                    2
+                ),
+
+            "target_margin":
+                base_margin,
+
+            "reason":
+                "No reliable market evidence. "
+                "Recommendation is cost-based only."
+
+        }
+
+
+    # --------------------------------------------------------
+    # MOVEMENT ADJUSTMENT
+    # --------------------------------------------------------
+
+    if movement == "Fast":
+
+        target = 3.5
+
+    elif movement == "Medium":
+
+        target = 5.0
+
+    else:
+
+        target = 7.0
+
+
+    # --------------------------------------------------------
+    # MARKET-BASED OPTIONS
+    # --------------------------------------------------------
+
+    value_price = low
+
+    balanced_price = median
+
+    margin_price = high
+
+
+    # --------------------------------------------------------
+    # COST FLOOR
+    # --------------------------------------------------------
+
+    cost_floor = buying_price * (
+        1 + target / 100
+    )
+
+
+    value_price = max(
+        value_price,
+        cost_floor
+    )
+
+
+    balanced_price = max(
+        balanced_price,
+        cost_floor
+    )
+
+
+    margin_price = max(
+        margin_price,
+        balanced_price
+    )
+
+
+    # --------------------------------------------------------
+    # RECOMMENDATION
+    # --------------------------------------------------------
+
+    if movement == "Fast":
+
+        recommended = balanced_price
+
+        reason = (
+            "Fast-moving product: "
+            "the strategy prioritizes "
+            "competitive turnover while "
+            "protecting a reasonable margin."
+        )
+
+    elif movement == "Slow":
+
+        recommended = margin_price
+
+        reason = (
+            "Slow-moving product: "
+            "the strategy gives more weight "
+            "to margin because capital may "
+            "remain tied up longer."
+        )
+
+    else:
+
+        recommended = balanced_price
+
+        reason = (
+            "Medium-moving product: "
+            "the strategy balances "
+            "market competitiveness and margin."
+        )
+
+
+    return {
+
+        "value":
+            round(value_price, 2),
+
+        "balanced":
+            round(balanced_price, 2),
+
+        "margin":
+            round(margin_price, 2),
+
+        "recommended":
+            round(recommended, 2),
+
+        "target_margin":
+            target,
+
+        "reason":
+            reason
+
+    }
+
+
+# ============================================================
+# LOAD EVIDENCE
 # ============================================================
 
 market_evidence = load_evidence()
 
 
 # ============================================================
-# QUICKBOOKS IMPORT
+# PHASE 1
+# QUICKBOOKS
 # ============================================================
 
 st.subheader(
-    "1. Upload Purchase File"
+    "1. Purchase Data"
 )
 
 
 uploaded_file = st.file_uploader(
-    "Upload your QuickBooks Excel file",
-    type=[
-        "xlsx",
-        "xls"
-    ]
+    "Upload today's QuickBooks Excel file",
+    type=["xlsx", "xls"]
 )
 
 
@@ -572,11 +933,6 @@ if uploaded_file is not None:
         )
 
 
-        data = data.dropna(
-            how="all"
-        ).copy()
-
-
         required_columns = [
 
             "Date",
@@ -590,22 +946,17 @@ if uploaded_file is not None:
         ]
 
 
-        missing_columns = [
-
-            column
-            for column in required_columns
-            if column not in data.columns
-
+        missing = [
+            c for c in required_columns
+            if c not in data.columns
         ]
 
 
-        if missing_columns:
+        if missing:
 
             st.error(
                 "Missing columns: "
-                + ", ".join(
-                    missing_columns
-                )
+                + ", ".join(missing)
             )
 
             st.stop()
@@ -636,102 +987,39 @@ if uploaded_file is not None:
 
 
         data = data[
-            data["Memo"] != ""
-        ].copy()
-
-
-        data = data[
+            (data["Memo"] != "")
+            &
             data["Cost Price"].notna()
         ].copy()
 
 
-        # ====================================================
-        # CREATE PRICING WORKSPACE
-        # ====================================================
+        pricing_data = pd.DataFrame({
 
-        pricing_data = pd.DataFrame()
+            "Product":
+                data["Memo"],
 
+            "Item":
+                data["Item"],
 
-        pricing_data["Product"] = (
-            data["Memo"]
-        )
+            "Buying Price":
+                data["Cost Price"],
 
+            "Quantity":
+                data["Qty"],
 
-        pricing_data["Item"] = (
-            data["Item"]
-        )
+            "Unit":
+                data["U/M"],
 
+            "Purchase Date":
+                data["Date"],
 
-        pricing_data["Buying Price"] = (
-            data["Cost Price"]
-        )
+            "Current Selling Price":
+                None,
 
+            "Margin":
+                None
 
-        pricing_data["Quantity"] = (
-            data["Qty"]
-        )
-
-
-        pricing_data["Unit"] = (
-            data["U/M"]
-        )
-
-
-        pricing_data["Purchase Date"] = (
-            data["Date"]
-        )
-
-
-        pricing_data[
-            "Current Selling Price"
-        ] = None
-
-
-        pricing_data[
-            "Margin"
-        ] = None
-
-
-        pricing_data[
-            "Market Range"
-        ] = (
-            "Awaiting verified "
-            "local evidence"
-        )
-
-
-        pricing_data[
-            "Evidence Status"
-        ] = (
-            "Awaiting evidence"
-        )
-
-
-        # ====================================================
-        # MATCH MARKET EVIDENCE
-        # ====================================================
-
-        for index, row in pricing_data.iterrows():
-
-            result = get_product_evidence(
-
-                row["Product"],
-
-                market_evidence
-
-            )
-
-
-            pricing_data.at[
-                index,
-                "Market Range"
-            ] = result["range"]
-
-
-            pricing_data.at[
-                index,
-                "Evidence Status"
-            ] = result["status"]
+        })
 
 
         st.session_state[
@@ -740,83 +1028,45 @@ if uploaded_file is not None:
 
 
         st.success(
-            f"{len(pricing_data)} products imported successfully."
+            f"{len(pricing_data)} products imported."
         )
 
 
     except Exception as error:
 
         st.error(
-            f"We could not process the QuickBooks file: {error}"
+            f"Could not process file: {error}"
         )
 
 
 # ============================================================
-# PRICING WORKSPACE
+# EVERYTHING BELOW REQUIRES PURCHASE DATA
 # ============================================================
 
 if "pricing_data" in st.session_state:
 
-    pricing_data = (
-        st.session_state[
-            "pricing_data"
-        ]
-    )
-
-
-    st.divider()
-
-    st.subheader(
-        "2. Pricing Workspace"
-    )
-
-
-    display_columns = [
-
-        "Product",
-        "Buying Price",
-        "Quantity",
-        "Unit",
-        "Market Range",
-        "Evidence Status",
-        "Current Selling Price",
-        "Margin"
-
+    pricing_data = st.session_state[
+        "pricing_data"
     ]
 
 
-    st.dataframe(
-
-        pricing_data[
-            display_columns
-        ],
-
-        use_container_width=True,
-
-        hide_index=True
-
-    )
-
-
     # ========================================================
-    # OWNER DECISION
+    # PHASE 2
+    # MARKET INTELLIGENCE
     # ========================================================
 
     st.divider()
 
     st.subheader(
-        "3. Owner Pricing Decision"
+        "2. Market Intelligence"
     )
 
 
     selected_product = st.selectbox(
-
-        "Select a product",
-
+        "Select product",
         pricing_data[
             "Product"
         ].tolist()
-
     )
 
 
@@ -831,12 +1081,18 @@ if "pricing_data" in st.session_state:
     ]
 
 
+    intelligence = get_product_evidence(
+        selected_product,
+        market_evidence
+    )
+
+
     # ========================================================
-    # PRODUCT SUMMARY
+    # PRODUCT HEADER
     # ========================================================
 
     st.markdown(
-        f"### {selected_product}"
+        f"## {selected_product}"
     )
 
 
@@ -846,64 +1102,35 @@ if "pricing_data" in st.session_state:
     with col1:
 
         st.metric(
-
             "Buying Price",
-
             f"KES "
             f"{selected_row['Buying Price']:,.2f}"
-
         )
 
 
     with col2:
 
-        quantity = selected_row[
-            "Quantity"
-        ]
-
         st.metric(
-
             "Quantity",
-
-            f"{quantity:g}"
-
+            f"{selected_row['Quantity']:g}"
         )
 
 
     with col3:
 
         st.metric(
-
-            "Evidence",
-
-            selected_row[
-                "Evidence Status"
-            ]
-
+            "Movement",
+            determine_movement(
+                selected_row["Quantity"]
+            )
         )
 
 
     # ========================================================
-    # MARKET INTELLIGENCE
+    # MARKET METRICS
     # ========================================================
 
-    evidence_result = get_product_evidence(
-
-        selected_product,
-
-        market_evidence
-
-    )
-
-
-    st.markdown(
-        "### Local Market Intelligence"
-    )
-
-
-    if evidence_result["status"] == (
-        "Local evidence available"
-    ):
+    if intelligence["low"] is not None:
 
         col1, col2, col3, col4 = st.columns(4)
 
@@ -911,309 +1138,140 @@ if "pricing_data" in st.session_state:
         with col1:
 
             st.metric(
-
-                "Local Market Low",
-
+                "Local Low",
                 f"KES "
-                f"{evidence_result['low']:,.2f}"
-
+                f"{intelligence['low']:,.2f}"
             )
 
 
         with col2:
 
             st.metric(
-
-                "Local Market High",
-
+                "Local High",
                 f"KES "
-                f"{evidence_result['high']:,.2f}"
-
+                f"{intelligence['high']:,.2f}"
             )
 
 
         with col3:
 
             st.metric(
-
-                "Local Median",
-
+                "Median",
                 f"KES "
-                f"{evidence_result['median']:,.2f}"
-
+                f"{intelligence['median']:,.2f}"
             )
 
 
         with col4:
 
             st.metric(
-
                 "Observations",
-
-                evidence_result[
-                    "count"
-                ]
-
+                intelligence["count"]
             )
 
 
+        col1, col2, col3 = st.columns(3)
+
+
+        with col1:
+
+            st.metric(
+                "Spread",
+                f"KES "
+                f"{intelligence['spread']:,.2f}"
+            )
+
+
+        with col2:
+
+            st.metric(
+                "Confidence",
+                intelligence["confidence"]
+            )
+
+
+        with col3:
+
+            st.metric(
+                "Market Trend",
+                intelligence["trend"]
+            )
+
+
+        pressure = competitive_pressure(
+            intelligence
+        )
+
+
         st.write(
-
-            f"**Market Spread:** "
-            f"KES "
-            f"{evidence_result['spread']:,.2f}"
-
+            f"**Competitive pressure:** "
+            f"{pressure}"
         )
 
 
-        st.success(
-
-            "These observations meet the current "
-            "local evidence threshold for the "
-            "Karatina–Nyeri corridor."
-
-        )
-
-
-    elif evidence_result["status"] == (
-        "Broader reference only"
-    ):
+    else:
 
         st.warning(
-
-            "Broader evidence exists, but there "
-            "is not enough verified local "
-            "Karatina–Nyeri evidence to establish "
-            "a local market range."
-
+            "No reliable market evidence is available "
+            "for this product yet."
         )
 
+
+    # ========================================================
+    # PHASE 3
+    # MARKET AGENT WATCHLIST
+    # ========================================================
+
+    st.divider()
+
+    st.subheader(
+        "3. Market Intelligence Agent"
+    )
+
+
+    watchlist = build_watchlist(
+        pricing_data,
+        market_evidence
+    )
+
+
+    if watchlist.empty:
+
+        st.success(
+            "Current products have sufficiently fresh evidence."
+        )
 
     else:
 
         st.info(
-
-            "There is not enough verified evidence "
-            "to establish a reliable market range."
-
+            f"{len(watchlist)} product(s) need "
+            "fresh market evidence."
         )
-
-
-    # ========================================================
-    # ACTUAL EVIDENCE RECORDS
-    # ========================================================
-
-    st.markdown(
-        "### Evidence Behind This Market View"
-    )
-
-
-    local_evidence = evidence_result[
-        "local"
-    ].copy()
-
-
-    broader_evidence = evidence_result[
-        "broader"
-    ].copy()
-
-
-    if not local_evidence.empty:
-
-        st.write(
-            "**Karatina–Nyeri local evidence**"
-        )
-
-
-        evidence_display = local_evidence[
-            [
-                "price",
-                "pack_size",
-                "unit",
-                "location",
-                "date",
-                "source",
-                "source_type",
-                "evidence_strength",
-                "geographic_relevance"
-            ]
-        ].copy()
-
-
-        evidence_display = (
-            evidence_display
-            .rename(
-                columns={
-
-                    "price":
-                        "Observed Price",
-
-                    "pack_size":
-                        "Pack Size",
-
-                    "unit":
-                        "Unit",
-
-                    "location":
-                        "Location",
-
-                    "date":
-                        "Date",
-
-                    "source":
-                        "Source",
-
-                    "source_type":
-                        "Source Type",
-
-                    "evidence_strength":
-                        "Evidence Strength",
-
-                    "geographic_relevance":
-                        "Geography"
-
-                }
-            )
-        )
-
 
         st.dataframe(
-
-            evidence_display,
-
+            watchlist,
             use_container_width=True,
-
             hide_index=True
-
-        )
-
-
-    else:
-
-        st.info(
-            "No qualifying Karatina–Nyeri "
-            "evidence records were found "
-            "for this product."
         )
 
 
     # ========================================================
-    # BROADER EVIDENCE
+    # TEMPORARY AGENT TEST INPUT
     # ========================================================
 
-    if not broader_evidence.empty:
+    with st.expander(
+        "Developer: Add a market observation"
+    ):
 
-        with st.expander(
-            "View broader supporting evidence"
-        ):
-
-            broader_display = (
-                broader_evidence[
-                    [
-                        "price",
-                        "pack_size",
-                        "unit",
-                        "location",
-                        "date",
-                        "source",
-                        "source_type",
-                        "evidence_strength",
-                        "geographic_relevance"
-                    ]
-                ]
-                .rename(
-                    columns={
-
-                        "price":
-                            "Observed Price",
-
-                        "pack_size":
-                            "Pack Size",
-
-                        "unit":
-                            "Unit",
-
-                        "location":
-                            "Location",
-
-                        "date":
-                            "Date",
-
-                        "source":
-                            "Source",
-
-                        "source_type":
-                            "Source Type",
-
-                        "evidence_strength":
-                            "Evidence Strength",
-
-                        "geographic_relevance":
-                            "Geography"
-
-                    }
-                )
-            )
-
-
-            st.dataframe(
-
-                broader_display,
-
-                use_container_width=True,
-
-                hide_index=True
-
-            )
-
-
-    # ========================================================
-    # SELLING PRICE
-    # ========================================================
-
-    st.markdown(
-        "### Your Current Selling Price"
-    )
-
-
-    selling_price = st.number_input(
-
-        "Current Selling Price (KES)",
-
-        min_value=0.0,
-
-        value=0.0,
-
-        step=1.0,
-
-        format="%.2f"
-
-    )
-
-
-    if selling_price > 0:
-
-        buying_price = float(
-            selected_row[
-                "Buying Price"
-            ]
+        st.caption(
+            "This is a temporary testing interface. "
+            "Later the market agent will populate this automatically."
         )
 
 
-        profit = (
-
-            selling_price
-            - buying_price
-
-        )
-
-
-        margin = calculate_margin(
-
-            buying_price,
-
-            selling_price
-
+        observation_product = st.text_input(
+            "Product",
+            value=selected_product
         )
 
 
@@ -1222,105 +1280,378 @@ if "pricing_data" in st.session_state:
 
         with col1:
 
+            observation_price = st.number_input(
+                "Observed Price",
+                min_value=0.0,
+                step=1.0
+            )
+
+
+        with col2:
+
+            observation_date = st.date_input(
+                "Observation Date",
+                value=date.today()
+            )
+
+
+        col1, col2 = st.columns(2)
+
+
+        with col1:
+
+            observation_location = st.selectbox(
+                "Location",
+                [
+                    "Karatina",
+                    "Nyeri Town",
+                    "Other"
+                ]
+            )
+
+
+        with col2:
+
+            observation_source_type = st.selectbox(
+                "Source Type",
+                [
+                    "WHOLESALER",
+                    "SUPPLIER",
+                    "OFFICIAL",
+                    "COMMERCIAL",
+                    "RETAIL"
+                ]
+            )
+
+
+        observation_source = st.text_input(
+            "Source / Competitor"
+        )
+
+
+        pack_size = st.text_input(
+            "Pack Size"
+        )
+
+
+        unit = st.text_input(
+            "Unit",
+            value="carton"
+        )
+
+
+        strength = st.selectbox(
+            "Evidence Strength",
+            [
+                "HIGH",
+                "MEDIUM",
+                "LOW"
+            ]
+        )
+
+
+        if st.button(
+            "Add Market Observation"
+        ):
+
+            if (
+                observation_product.strip()
+                and observation_price > 0
+            ):
+
+                if observation_location in [
+                    "Karatina",
+                    "Nyeri Town"
+                ]:
+
+                    geography = (
+                        "KARATINA-NYERI CORRIDOR"
+                    )
+
+                else:
+
+                    geography = "WIDER / OTHER"
+
+
+                new_row = {
+
+                    "product":
+                        observation_product,
+
+                    "pack_size":
+                        pack_size,
+
+                    "location":
+                        observation_location,
+
+                    "price":
+                        observation_price,
+
+                    "unit":
+                        unit,
+
+                    "date":
+                        observation_date.isoformat(),
+
+                    "source":
+                        observation_source,
+
+                    "source_type":
+                        observation_source_type,
+
+                    "evidence_strength":
+                        strength,
+
+                    "geographic_relevance":
+                        geography
+
+                }
+
+
+                market_evidence = pd.concat(
+                    [
+                        market_evidence,
+                        pd.DataFrame([new_row])
+                    ],
+                    ignore_index=True
+                )
+
+
+                save_evidence(
+                    market_evidence
+                )
+
+
+                st.success(
+                    "Market observation added."
+                )
+
+                st.rerun()
+
+
+            else:
+
+                st.error(
+                    "Product and price are required."
+                )
+
+
+    # ========================================================
+    # PHASE 4
+    # MOVEMENT
+    # ========================================================
+
+    st.divider()
+
+    st.subheader(
+        "4. Product Movement"
+    )
+
+
+    movement = determine_movement(
+        selected_row["Quantity"]
+    )
+
+
+    if movement == "Fast":
+
+        movement_message = (
+            "Fast-moving signal: prioritize "
+            "competitive turnover and cash flow."
+        )
+
+    elif movement == "Medium":
+
+        movement_message = (
+            "Medium-moving signal: balance "
+            "margin and competitiveness."
+        )
+
+    else:
+
+        movement_message = (
+            "Slow-moving signal: protect margin "
+            "because capital may remain tied up."
+        )
+
+
+    st.info(
+        f"**Movement: {movement}** — "
+        f"{movement_message}"
+    )
+
+
+    # ========================================================
+    # PHASE 5
+    # PRICING STRATEGY
+    # ========================================================
+
+    st.divider()
+
+    st.subheader(
+        "5. Pricing Strategy"
+    )
+
+
+    strategy = pricing_strategy(
+
+        float(
+            selected_row[
+                "Buying Price"
+            ]
+        ),
+
+        intelligence,
+
+        movement
+
+    )
+
+
+    col1, col2, col3 = st.columns(3)
+
+
+    with col1:
+
+        st.metric(
+            "VALUE PRICE",
+            f"KES "
+            f"{strategy['value']:,.2f}"
+        )
+
+
+    with col2:
+
+        st.metric(
+            "BALANCED PRICE",
+            f"KES "
+            f"{strategy['balanced']:,.2f}"
+        )
+
+
+    with col3:
+
+        st.metric(
+            "MARGIN PRICE",
+            f"KES "
+            f"{strategy['margin']:,.2f}"
+        )
+
+
+    st.success(
+        f"### Recommended Price: "
+        f"KES {strategy['recommended']:,.2f}"
+    )
+
+
+    st.write(
+        f"**Target margin strategy:** "
+        f"{strategy['target_margin']:.1f}%"
+    )
+
+
+    st.info(
+        f"**Why:** {strategy['reason']}"
+    )
+
+
+    # ========================================================
+    # CURRENT SELLING PRICE
+    # ========================================================
+
+    st.divider()
+
+    st.subheader(
+        "Owner's Current Price"
+    )
+
+
+    current_price = st.number_input(
+
+        "Current Selling Price (KES)",
+
+        min_value=0.0,
+
+        step=1.0,
+
+        format="%.2f",
+
+        key=f"current_price_{selected_index}"
+
+    )
+
+
+    if current_price > 0:
+
+        buying = float(
+            selected_row[
+                "Buying Price"
+            ]
+        )
+
+
+        current_margin = calculate_margin(
+            buying,
+            current_price
+        )
+
+
+        current_profit = calculate_profit(
+            buying,
+            current_price
+        )
+
+
+        col1, col2, col3 = st.columns(3)
+
+
+        with col1:
+
             st.metric(
-
-                "Profit",
-
-                f"KES {profit:,.2f}"
-
+                "Current Profit",
+                f"KES "
+                f"{current_profit:,.2f}"
             )
 
 
         with col2:
 
             st.metric(
-
                 "Current Margin",
-
-                f"{margin:.2f}%"
-
+                f"{current_margin:.2f}%"
             )
 
 
-        # ====================================================
-        # HUMAN-CENTRED OBSERVATION
-        # ====================================================
+        with col3:
 
-        if margin < 1:
-
-            advice = (
-
-                "This is a very thin margin. "
-                "Before changing the price, consider "
-                "operating costs and the strategic "
-                "importance of this product."
-
-            )
-
-        elif margin < 3:
-
-            advice = (
-
-                "Your margin is thin. "
-                "Consider competition, operating costs "
-                "and how quickly this product moves."
-
-            )
-
-        elif margin < 5:
-
-            advice = (
-
-                "Your margin is moderate. "
-                "Check whether the price remains competitive "
-                "while giving the business room to operate."
-
-            )
-
-        else:
-
-            advice = (
-
-                "Your margin provides more room for profit. "
-                "Still compare it with verified market evidence "
-                "before changing the price."
-
+            difference = (
+                current_price
+                -
+                strategy["recommended"]
             )
 
 
-        st.info(
-            f"**System observation:** {advice}"
-        )
+            st.metric(
+                "vs Recommendation",
+                f"KES {difference:,.2f}"
+            )
 
-
-        # ====================================================
-        # SAVE SELLING PRICE
-        # ====================================================
 
         if st.button(
-
-            "Save Selling Price",
-
+            "Save Owner Price",
             type="primary"
-
         ):
 
             pricing_data.at[
-
                 selected_index,
-
                 "Current Selling Price"
-
-            ] = selling_price
+            ] = current_price
 
 
             pricing_data.at[
-
                 selected_index,
-
                 "Margin"
-
-            ] = margin
+            ] = current_margin
 
 
             st.session_state[
@@ -1329,108 +1660,43 @@ if "pricing_data" in st.session_state:
 
 
             st.success(
-
                 f"Saved KES "
-                f"{selling_price:,.2f} "
-                f"for {selected_product}."
-
+                f"{current_price:,.2f}."
             )
 
 
 # ============================================================
-# FULL EVIDENCE DATABASE
+# EVIDENCE DATABASE
 # ============================================================
 
 st.divider()
 
 st.subheader(
-    "4. Market Evidence Database"
+    "Market Evidence Database"
 )
 
 
 if market_evidence.empty:
 
     st.info(
-        "No verified market evidence has been added yet."
+        "No market observations have been collected yet. "
+        "The database is ready for the market intelligence agent."
     )
-
 
 else:
 
     st.caption(
-
-        f"{len(market_evidence)} evidence "
-        "record(s) currently available."
-
+        f"{len(market_evidence)} market observation(s)."
     )
 
 
-    evidence_columns = [
-
-        "product",
-        "pack_size",
-        "location",
-        "price",
-        "unit",
-        "date",
-        "source",
-        "source_type",
-        "evidence_strength",
-        "geographic_relevance"
-
-    ]
-
-
-    full_evidence_display = (
-        market_evidence[
-            evidence_columns
-        ]
-        .rename(
-            columns={
-
-                "product":
-                    "Product",
-
-                "pack_size":
-                    "Pack Size",
-
-                "location":
-                    "Location",
-
-                "price":
-                    "Price",
-
-                "unit":
-                    "Unit",
-
-                "date":
-                    "Date",
-
-                "source":
-                    "Source",
-
-                "source_type":
-                    "Source Type",
-
-                "evidence_strength":
-                    "Evidence Strength",
-
-                "geographic_relevance":
-                    "Geography"
-
-            }
-        )
-    )
+    display = market_evidence.copy()
 
 
     st.dataframe(
-
-        full_evidence_display,
-
+        display,
         use_container_width=True,
-
         hide_index=True
-
     )
 
 
@@ -1441,8 +1707,6 @@ else:
 st.divider()
 
 st.caption(
-
-    "The system brings evidence and reasoning; "
-    "the wholesaler retains the final pricing decision."
-
+    "The system researches and reasons. "
+    "The wholesaler retains the final pricing decision."
 )
