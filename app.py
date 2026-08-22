@@ -1,10 +1,12 @@
 import streamlit as st
 import pandas as pd
+import os
+from datetime import datetime
 
 
-# ==========================================
-# PAGE SETUP
-# ==========================================
+# ============================================================
+# PAGE
+# ============================================================
 
 st.set_page_config(
     page_title="Wholesale Pricing Workspace",
@@ -12,17 +14,289 @@ st.set_page_config(
 )
 
 st.title("Wholesale Pricing Workspace")
-st.write(
-    "Upload your QuickBooks purchase file and review your pricing."
+st.caption(
+    "A simple pricing workspace that combines purchase information, "
+    "market evidence and owner judgement."
 )
 
 
-# ==========================================
-# EXCEL UPLOAD
-# ==========================================
+# ============================================================
+# HELPER FUNCTIONS
+# ============================================================
+
+def clean_text(value):
+    if pd.isna(value):
+        return ""
+    return str(value).replace("\xa0", " ").strip()
+
+
+def normalize_product(value):
+    return (
+        clean_text(value)
+        .upper()
+        .replace("  ", " ")
+    )
+
+
+def calculate_margin(buying_price, selling_price):
+    if selling_price is None or selling_price <= 0:
+        return None
+
+    return (
+        (selling_price - buying_price)
+        / selling_price
+    ) * 100
+
+
+def classify_geography(location):
+    location = clean_text(location).lower()
+
+    if not location:
+        return "Unknown"
+
+    karatina_terms = [
+        "karatina"
+    ]
+
+    nyeri_terms = [
+        "nyeri",
+        "nyeri town"
+    ]
+
+    corridor_terms = [
+        "mukurwe-ini",
+        "mukurweini",
+        "mathira",
+        "chaka",
+        "kiganjo"
+    ]
+
+    if any(term in location for term in karatina_terms):
+        return "Core Local"
+
+    if any(term in location for term in nyeri_terms):
+        return "Core Local"
+
+    if any(term in location for term in corridor_terms):
+        return "Karatina-Nyeri Corridor"
+
+    return "Wider / Other"
+
+
+def evidence_score(row):
+    score = 0
+
+    source_type = clean_text(
+        row.get("source_type", "")
+    ).lower()
+
+    strength = clean_text(
+        row.get("evidence_strength", "")
+    ).lower()
+
+    geography = clean_text(
+        row.get("geographic_relevance", "")
+    ).lower()
+
+    if strength == "high":
+        score += 3
+    elif strength == "medium":
+        score += 2
+    elif strength == "low":
+        score += 1
+
+    if "official" in source_type:
+        score += 3
+    elif "wholesaler" in source_type:
+        score += 3
+    elif "supplier" in source_type:
+        score += 2
+    elif "commercial" in source_type:
+        score += 1
+    elif "retail" in source_type:
+        score -= 2
+
+    if "core local" in geography:
+        score += 3
+    elif "corridor" in geography:
+        score += 2
+    elif "wider" in geography:
+        score += 1
+
+    return score
+
+
+# ============================================================
+# MARKET EVIDENCE ENGINE
+# ============================================================
+
+def load_market_evidence():
+
+    file_name = "market_evidence.csv"
+
+    if not os.path.exists(file_name):
+        return pd.DataFrame()
+
+    try:
+        evidence = pd.read_csv(file_name)
+
+        evidence.columns = (
+            evidence.columns
+            .astype(str)
+            .str.strip()
+        )
+
+        required_columns = [
+            "product",
+            "pack_size",
+            "location",
+            "price",
+            "unit",
+            "date",
+            "source",
+            "source_type",
+            "evidence_strength",
+            "geographic_relevance"
+        ]
+
+        for column in required_columns:
+            if column not in evidence.columns:
+                evidence[column] = ""
+
+        evidence["price"] = pd.to_numeric(
+            evidence["price"],
+            errors="coerce"
+        )
+
+        evidence = evidence.dropna(
+            subset=["price"]
+        ).copy()
+
+        if evidence.empty:
+            return evidence
+
+        evidence["geography_class"] = (
+            evidence["location"]
+            .apply(classify_geography)
+        )
+
+        evidence["evidence_score"] = (
+            evidence.apply(
+                evidence_score,
+                axis=1
+            )
+        )
+
+        return evidence
+
+    except Exception as error:
+        st.warning(
+            f"Market evidence could not be loaded: {error}"
+        )
+        return pd.DataFrame()
+
+
+def get_market_evidence(
+    product_name,
+    evidence
+):
+
+    if evidence.empty:
+        return {
+            "range": "No verified evidence yet",
+            "status": "No evidence",
+            "count": 0,
+            "sources": []
+        }
+
+    product_normalized = normalize_product(
+        product_name
+    )
+
+    matches = evidence[
+        evidence["product"]
+        .apply(normalize_product)
+        == product_normalized
+    ].copy()
+
+    if matches.empty:
+        return {
+            "range": "No verified evidence yet",
+            "status": "No evidence",
+            "count": 0,
+            "sources": []
+        }
+
+    # Only evidence with reasonable confidence
+    valid = matches[
+        matches["evidence_score"] >= 5
+    ].copy()
+
+    # Prefer local evidence
+    local = valid[
+        valid["geography_class"].isin(
+            [
+                "Core Local",
+                "Karatina-Nyeri Corridor"
+            ]
+        )
+    ].copy()
+
+    if len(local) >= 2:
+
+        lowest = local["price"].min()
+        highest = local["price"].max()
+
+        return {
+            "range": (
+                f"KES {lowest:,.2f} – "
+                f"KES {highest:,.2f}"
+            ),
+            "status": "Local evidence",
+            "count": len(local),
+            "sources": local["source"].tolist()
+        }
+
+    # If local evidence is insufficient,
+    # do not pretend wider evidence is local.
+    if len(valid) >= 2:
+
+        lowest = valid["price"].min()
+        highest = valid["price"].max()
+
+        return {
+            "range": (
+                f"KES {lowest:,.2f} – "
+                f"KES {highest:,.2f}"
+            ),
+            "status": "Broader reference only",
+            "count": len(valid),
+            "sources": valid["source"].tolist()
+        }
+
+    return {
+        "range": "Insufficient evidence",
+        "status": "Insufficient evidence",
+        "count": len(valid),
+        "sources": valid["source"].tolist()
+    }
+
+
+# ============================================================
+# LOAD EVIDENCE
+# ============================================================
+
+market_evidence = load_market_evidence()
+
+
+# ============================================================
+# QUICKBOOKS UPLOAD
+# ============================================================
+
+st.subheader("1. Upload Purchase File")
 
 uploaded_file = st.file_uploader(
-    "Upload QuickBooks Excel file",
+    "Upload your QuickBooks Excel file",
     type=["xlsx", "xls"]
 )
 
@@ -31,9 +305,9 @@ if uploaded_file is not None:
 
     try:
 
-        # ==========================================
-        # READ QUICKBOOKS SHEET
-        # ==========================================
+        # ----------------------------------------------------
+        # READ EXCEL
+        # ----------------------------------------------------
 
         data = pd.read_excel(
             uploaded_file,
@@ -41,7 +315,6 @@ if uploaded_file is not None:
             header=0
         )
 
-        # Clean column names
         data.columns = (
             data.columns
             .astype(str)
@@ -49,13 +322,14 @@ if uploaded_file is not None:
             .str.strip()
         )
 
-        # Remove completely empty rows
-        data = data.dropna(how="all").copy()
+        data = data.dropna(
+            how="all"
+        ).copy()
 
 
-        # ==========================================
-        # CHECK REQUIRED COLUMNS
-        # ==========================================
+        # ----------------------------------------------------
+        # REQUIRED COLUMNS
+        # ----------------------------------------------------
 
         required_columns = [
             "Date",
@@ -67,25 +341,35 @@ if uploaded_file is not None:
             "Cost Price"
         ]
 
-        missing_columns = [
+        missing = [
             column
             for column in required_columns
             if column not in data.columns
         ]
 
-        if missing_columns:
+        if missing:
 
             st.error(
-                "The QuickBooks file is missing these columns: "
-                + ", ".join(missing_columns)
+                "Missing columns: "
+                + ", ".join(missing)
             )
 
             st.stop()
 
 
-        # ==========================================
-        # CLEAN NUMERIC DATA
-        # ==========================================
+        # ----------------------------------------------------
+        # CLEAN DATA
+        # ----------------------------------------------------
+
+        data["Memo"] = (
+            data["Memo"]
+            .apply(clean_text)
+        )
+
+        data["Item"] = (
+            data["Item"]
+            .apply(clean_text)
+        )
 
         data["Cost Price"] = pd.to_numeric(
             data["Cost Price"],
@@ -97,36 +381,28 @@ if uploaded_file is not None:
             errors="coerce"
         )
 
-
-        # ==========================================
-        # REMOVE INVALID / SUMMARY ROWS
-        # ==========================================
-
-        data = data[
-            data["Memo"].notna()
-            & data["Cost Price"].notna()
-        ].copy()
-
-        data["Memo"] = (
-            data["Memo"]
-            .astype(str)
-            .str.strip()
-        )
-
         data = data[
             data["Memo"] != ""
         ].copy()
 
+        data = data[
+            data["Cost Price"].notna()
+        ].copy()
 
-        # ==========================================
-        # CREATE PRICING WORKSPACE
-        # ==========================================
+
+        # ----------------------------------------------------
+        # PRICING TABLE
+        # ----------------------------------------------------
 
         pricing_data = pd.DataFrame()
 
         pricing_data["Product"] = data["Memo"]
 
-        pricing_data["Buying Price"] = data["Cost Price"]
+        pricing_data["Item"] = data["Item"]
+
+        pricing_data["Buying Price"] = (
+            data["Cost Price"]
+        )
 
         pricing_data["Quantity"] = data["Qty"]
 
@@ -134,238 +410,378 @@ if uploaded_file is not None:
 
         pricing_data["Purchase Date"] = data["Date"]
 
-        pricing_data["Market Range"] = "No evidence yet"
-
         pricing_data["Current Selling Price"] = None
 
-        pricing_data["Current Margin"] = None
+        pricing_data["Margin"] = None
+
+        pricing_data["Market Range"] = (
+            "No verified evidence yet"
+        )
+
+        pricing_data["Evidence Status"] = (
+            "No evidence"
+        )
 
 
-        # ==========================================
-        # LOAD MARKET EVIDENCE
-        # ==========================================
+        # ----------------------------------------------------
+        # MARKET EVIDENCE
+        # ----------------------------------------------------
 
-        try:
+        for index, row in pricing_data.iterrows():
 
-            evidence = pd.read_csv(
-                "market_evidence.csv"
+            evidence_result = get_market_evidence(
+                row["Product"],
+                market_evidence
             )
 
-            # Make sure the evidence file has the
-            # expected columns
-            evidence_columns = [
-                "product",
-                "pack_size",
-                "location",
-                "price",
-                "unit",
-                "date",
-                "source",
-                "source_type",
-                "evidence_strength"
-            ]
+            pricing_data.at[
+                index,
+                "Market Range"
+            ] = evidence_result["range"]
 
-            if all(
-                column in evidence.columns
-                for column in evidence_columns
-            ):
-
-                evidence["price"] = pd.to_numeric(
-                    evidence["price"],
-                    errors="coerce"
-                )
-
-                evidence = evidence.dropna(
-                    subset=["price"]
-                ).copy()
+            pricing_data.at[
+                index,
+                "Evidence Status"
+            ] = evidence_result["status"]
 
 
-                # ==========================================
-                # CREATE MARKET RANGES
-                # ==========================================
+        # ----------------------------------------------------
+        # SAVE IN SESSION
+        # ----------------------------------------------------
 
-                for index, row in pricing_data.iterrows():
+        st.session_state["pricing_data"] = (
+            pricing_data
+        )
 
-                    product_name = str(
-                        row["Product"]
-                    ).strip().upper()
-
-                    product_evidence = evidence[
-                        evidence["product"]
-                        .astype(str)
-                        .str.strip()
-                        .str.upper()
-                        == product_name
-                    ]
-
-                    if not product_evidence.empty:
-
-                        lowest_price = (
-                            product_evidence["price"]
-                            .min()
-                        )
-
-                        highest_price = (
-                            product_evidence["price"]
-                            .max()
-                        )
-
-                        pricing_data.at[
-                            index,
-                            "Market Range"
-                        ] = (
-                            f"KES {lowest_price:,.2f}"
-                            f" – "
-                            f"KES {highest_price:,.2f}"
-                        )
-
-
-        except FileNotFoundError:
-
-            # Evidence file does not exist yet.
-            # This is acceptable for V1.
-            pass
-
-
-        # ==========================================
-        # DISPLAY IMPORT RESULT
-        # ==========================================
 
         st.success(
             f"{len(pricing_data)} products imported successfully."
         )
 
 
-        # ==========================================
-        # PRICING TABLE
-        # ==========================================
+    except Exception as error:
 
-        st.subheader("Pricing Workspace")
-
-        st.dataframe(
-            pricing_data,
-            use_container_width=True,
-            hide_index=True
+        st.error(
+            f"We could not process the QuickBooks file: {error}"
         )
 
 
-        # ==========================================
-        # OWNER PRICE ENTRY
-        # ==========================================
+# ============================================================
+# PRICING WORKSPACE
+# ============================================================
 
-        st.divider()
+if "pricing_data" in st.session_state:
 
-        st.subheader("Enter Your Selling Price")
+    pricing_data = st.session_state[
+        "pricing_data"
+    ]
 
-        product_options = pricing_data[
-            "Product"
-        ].tolist()
+    st.divider()
 
-        selected_product = st.selectbox(
-            "Select a product",
-            product_options
-        )
+    st.subheader("2. New Purchases")
+
+    st.caption(
+        "Your purchase information remains visible. "
+        "Market information is shown only when evidence exists."
+    )
 
 
-        # Get selected product
-        selected_index = pricing_data[
-            pricing_data["Product"]
-            == selected_product
-        ].index[0]
+    # --------------------------------------------------------
+    # SIMPLE TABLE
+    # --------------------------------------------------------
 
-        selected_row = pricing_data.loc[
-            selected_index
+    display_data = pricing_data[
+        [
+            "Product",
+            "Buying Price",
+            "Quantity",
+            "Unit",
+            "Market Range",
+            "Evidence Status",
+            "Current Selling Price",
+            "Margin"
         ]
+    ].copy()
+
+    st.dataframe(
+        display_data,
+        use_container_width=True,
+        hide_index=True
+    )
 
 
-        # ==========================================
-        # SHOW PRODUCT INFORMATION
-        # ==========================================
+    # ========================================================
+    # OWNER PRICING
+    # ========================================================
 
-        st.write(
-            f"**Product:** {selected_product}"
-        )
+    st.divider()
 
-        st.write(
-            f"**Buying Price:** "
+    st.subheader("3. Owner Pricing Decision")
+
+    product_list = pricing_data[
+        "Product"
+    ].tolist()
+
+    selected_product = st.selectbox(
+        "Select a product",
+        product_list
+    )
+
+
+    selected_index = pricing_data[
+        pricing_data["Product"]
+        == selected_product
+    ].index[0]
+
+    selected_row = pricing_data.loc[
+        selected_index
+    ]
+
+
+    # --------------------------------------------------------
+    # PRODUCT INFORMATION
+    # --------------------------------------------------------
+
+    st.markdown(
+        f"### {selected_product}"
+    )
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+
+        st.metric(
+            "Buying Price",
             f"KES {selected_row['Buying Price']:,.2f}"
         )
 
-        st.write(
-            f"**Market Evidence:** "
-            f"{selected_row['Market Range']}"
+    with col2:
+
+        st.metric(
+            "Quantity",
+            f"{selected_row['Quantity']:g}"
+        )
+
+    with col3:
+
+        st.metric(
+            "Market Evidence",
+            selected_row["Evidence Status"]
         )
 
 
-        # ==========================================
-        # OWNER ENTERS SELLING PRICE
-        # ==========================================
+    st.write(
+        f"**Observed Market Range:** "
+        f"{selected_row['Market Range']}"
+    )
 
-        selling_price = st.number_input(
-            "Your Current Selling Price (KES)",
-            min_value=0.0,
-            step=1.0,
-            format="%.2f"
+
+    # --------------------------------------------------------
+    # SELLING PRICE
+    # --------------------------------------------------------
+
+    current_price = st.number_input(
+        "Your Current Selling Price (KES)",
+        min_value=0.0,
+        value=0.0,
+        step=1.0,
+        format="%.2f"
+    )
+
+
+    # --------------------------------------------------------
+    # CALCULATE MARGIN
+    # --------------------------------------------------------
+
+    if current_price > 0:
+
+        buying_price = float(
+            selected_row["Buying Price"]
+        )
+
+        profit = (
+            current_price
+            - buying_price
+        )
+
+        margin = calculate_margin(
+            buying_price,
+            current_price
         )
 
 
-        # ==========================================
-        # CALCULATE MARGIN
-        # ==========================================
+        col1, col2 = st.columns(2)
 
-        if selling_price > 0:
+        with col1:
 
-            buying_price = float(
-                selected_row["Buying Price"]
-            )
-
-            profit = (
-                selling_price
-                - buying_price
-            )
-
-            margin = (
-                profit
-                / selling_price
-                * 100
-            )
-
-
-            st.write(
-                f"**Profit per selling unit:** "
+            st.metric(
+                "Profit per Unit",
                 f"KES {profit:,.2f}"
             )
 
-            st.write(
-                f"**Current Margin:** "
+        with col2:
+
+            st.metric(
+                "Current Margin",
                 f"{margin:.2f}%"
             )
 
 
-            # ==========================================
-            # OWNER DECISION
-            # ==========================================
+        # ----------------------------------------------------
+        # SIMPLE HUMAN-CENTRED REASONING
+        # ----------------------------------------------------
 
-            st.info(
-                "The selling price is your decision. "
-                "The system provides information and "
-                "calculations to support your judgement."
+        if margin < 1:
+
+            observation = (
+                "Your margin is below 1%. "
+                "This is a very thin margin and may "
+                "leave little room for operating costs."
+            )
+
+        elif margin < 3:
+
+            observation = (
+                "Your margin is relatively thin. "
+                "Consider your costs, competition and "
+                "how quickly this product normally moves."
+            )
+
+        elif margin < 5:
+
+            observation = (
+                "Your margin is moderate. "
+                "Consider whether the price remains "
+                "competitive in your market."
+            )
+
+        else:
+
+            observation = (
+                "Your margin provides more room for profit. "
+                "Check that the price remains competitive."
             )
 
 
-            if st.button(
-                "Save Selling Price"
-            ):
-
-                st.success(
-                    f"Selling price of "
-                    f"KES {selling_price:,.2f} "
-                    f"recorded for {selected_product}."
-                )
-
-
-    except Exception as e:
-
-        st.error(
-            f"We could not process the QuickBooks file: {e}"
+        st.info(
+            f"**System observation:** {observation}"
         )
+
+
+        # ----------------------------------------------------
+        # EVIDENCE REASONING
+        # ----------------------------------------------------
+
+        if selected_row["Evidence Status"] == "Local evidence":
+
+            st.success(
+                "Local market evidence is available. "
+                "Use it as a reference rather than an instruction."
+            )
+
+        elif selected_row[
+            "Evidence Status"
+        ] == "Broader reference only":
+
+            st.warning(
+                "Broader market evidence exists, but it has "
+                "not been treated as a Karatina–Nyeri local price."
+            )
+
+        elif selected_row[
+            "Evidence Status"
+        ] == "Insufficient evidence":
+
+            st.warning(
+                "There is not enough verified evidence "
+                "to establish a reliable market range."
+            )
+
+        else:
+
+            st.info(
+                "The system is waiting for verified market evidence."
+            )
+
+
+        # ----------------------------------------------------
+        # OWNER CONTROL
+        # ----------------------------------------------------
+
+        if st.button(
+            "Save Selling Price",
+            type="primary"
+        ):
+
+            pricing_data.at[
+                selected_index,
+                "Current Selling Price"
+            ] = current_price
+
+            pricing_data.at[
+                selected_index,
+                "Margin"
+            ] = margin
+
+            st.session_state[
+                "pricing_data"
+            ] = pricing_data
+
+            st.success(
+                f"Price saved for {selected_product}."
+            )
+
+
+# ============================================================
+# MARKET EVIDENCE MANAGEMENT
+# ============================================================
+
+st.divider()
+
+st.subheader("Market Evidence")
+
+if market_evidence.empty:
+
+    st.info(
+        "No verified market evidence has been added yet. "
+        "This is intentional: the system will not invent market prices."
+    )
+
+else:
+
+    st.caption(
+        "Evidence is separated by geography and source quality."
+    )
+
+    evidence_display = market_evidence[
+        [
+            "product",
+            "pack_size",
+            "location",
+            "price",
+            "unit",
+            "date",
+            "source",
+            "source_type",
+            "evidence_strength",
+            "geographic_relevance"
+        ]
+    ].copy()
+
+    st.dataframe(
+        evidence_display,
+        use_container_width=True,
+        hide_index=True
+    )
+
+
+# ============================================================
+# SYSTEM PRINCIPLE
+# ============================================================
+
+st.divider()
+
+st.caption(
+    "The system supports the wholesaler's decision. "
+    "It does not replace the owner's judgement."
+)
