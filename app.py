@@ -1,828 +1,182 @@
 import streamlit as st
 import pandas as pd
-import os
-from datetime import date
+import numpy as np
 
 
 # ============================================================
-# PAGE
+# PAGE SETUP
 # ============================================================
 
 st.set_page_config(
-    page_title="Wholesale Pricing Intelligence",
+    page_title="Wholesale Pricing Workspace",
+    page_icon="💼",
     layout="wide"
 )
 
-st.title("Wholesale Pricing Intelligence")
-
+st.title("Wholesale Pricing Workspace")
 st.caption(
-    "Purchase data → market intelligence → competitiveness "
-    "→ movement → pricing strategy"
+    "Review your purchases, enter your selling prices, "
+    "and understand your margins."
 )
 
 
 # ============================================================
-# FILES
-# ============================================================
-
-EVIDENCE_FILE = "market_evidence.csv"
-
-SOURCE_FILE = "source_registry.csv"
-
-
-# ============================================================
-# HELPERS
+# HELPER FUNCTIONS
 # ============================================================
 
 def clean_text(value):
-
+    """Clean Excel text safely."""
     if pd.isna(value):
         return ""
+    return str(value).replace("\xa0", " ").strip()
 
+
+def normalize_column(value):
+    """Normalize Excel column names."""
     return (
-        str(value)
-        .replace("\xa0", " ")
+        clean_text(value)
+        .replace("\n", " ")
+        .replace("  ", " ")
         .strip()
     )
 
 
-def normalize_text(value):
+def find_header_row(raw_data):
+    """
+    Find the actual QuickBooks header row.
+    This protects us from blank rows above the Excel table.
+    """
+
+    expected = {
+        "Date",
+        "Num",
+        "Memo",
+        "Item",
+        "Qty",
+        "U/M",
+        "Cost Price"
+    }
+
+    for row_number in range(
+        min(20, len(raw_data))
+    ):
+
+        row_values = {
+            normalize_column(value)
+            for value in raw_data.iloc[row_number].tolist()
+        }
+
+        matches = len(
+            expected.intersection(row_values)
+        )
+
+        if matches >= 4:
+            return row_number
+
+    return 0
+
+
+def calculate_markup(
+    buying_price,
+    selling_price
+):
+    """Markup = profit / buying price."""
+
+    if buying_price <= 0 or selling_price <= 0:
+        return np.nan
+
+    profit = selling_price - buying_price
 
     return (
-        clean_text(value)
-        .upper()
-        .replace("  ", " ")
-    )
+        profit / buying_price
+    ) * 100
 
 
 def calculate_margin(
     buying_price,
     selling_price
 ):
+    """Margin = profit / selling price."""
 
     if selling_price <= 0:
+        return np.nan
 
-        return None
+    profit = selling_price - buying_price
 
     return (
-        (selling_price - buying_price)
-        / selling_price
+        profit / selling_price
     ) * 100
 
 
-# ============================================================
-# SOURCE REGISTRY
-# ============================================================
-
-def load_sources():
-
-    if not os.path.exists(
-        SOURCE_FILE
-    ):
-
-        return pd.DataFrame()
-
-    try:
-
-        sources = pd.read_csv(
-            SOURCE_FILE
-        )
-
-        sources.columns = (
-            sources.columns
-            .astype(str)
-            .str.strip()
-        )
-
-        return sources
-
-    except Exception as error:
-
-        st.warning(
-            f"Source registry error: {error}"
-        )
-
-        return pd.DataFrame()
-
-
-source_registry = load_sources()
-
-
-# ============================================================
-# EVIDENCE DATABASE
-# ============================================================
-
-def empty_evidence():
-
-    return pd.DataFrame(
-
-        columns=[
-
-            "product",
-            "pack_size",
-            "location",
-            "price",
-            "unit",
-            "date",
-            "source",
-            "source_type",
-            "evidence_strength",
-            "geographic_relevance"
-
-        ]
-
-    )
-
-
-def load_evidence():
-
-    if not os.path.exists(
-        EVIDENCE_FILE
-    ):
-
-        return empty_evidence()
-
-    try:
-
-        evidence = pd.read_csv(
-            EVIDENCE_FILE
-        )
-
-        required = [
-
-            "product",
-            "pack_size",
-            "location",
-            "price",
-            "unit",
-            "date",
-            "source",
-            "source_type",
-            "evidence_strength",
-            "geographic_relevance"
-
-        ]
-
-        for column in required:
-
-            if column not in evidence.columns:
-
-                evidence[column] = ""
-
-        evidence["price"] = pd.to_numeric(
-            evidence["price"],
-            errors="coerce"
-        )
-
-        evidence = evidence.dropna(
-            subset=["price"]
-        )
-
-        return evidence
-
-    except Exception as error:
-
-        st.warning(
-            f"Evidence database error: {error}"
-        )
-
-        return empty_evidence()
-
-
-def save_evidence(
-    evidence
+def pricing_observation(
+    margin,
+    markup
 ):
+    """Simple V1 human-readable observation."""
 
-    evidence.to_csv(
-        EVIDENCE_FILE,
-        index=False
-    )
+    if pd.isna(margin):
 
+        return (
+            "Enter your current selling price "
+            "to see your pricing position."
+        )
 
-market_evidence = load_evidence()
+    if margin < 1:
 
+        return (
+            "Very thin margin. Consider your operating "
+            "costs, customer expectations and how quickly "
+            "this product moves."
+        )
 
-# ============================================================
-# EVIDENCE SCORING
-# ============================================================
+    if margin < 3:
 
-def source_score(
-    source_type
-):
+        return (
+            "Thin margin. Check whether this price gives "
+            "the business enough room after other costs."
+        )
 
-    source_type = normalize_text(
-        source_type
-    )
+    if margin < 5:
 
-    scores = {
-
-        "OFFICIAL": 3,
-
-        "WHOLESALER": 3,
-
-        "SUPPLIER": 2,
-
-        "COMMERCIAL": 1,
-
-        "RETAIL": 0
-
-    }
-
-    return scores.get(
-        source_type,
-        0
-    )
-
-
-def geography_score(
-    location,
-    relevance
-):
-
-    location = normalize_text(
-        location
-    )
-
-    relevance = normalize_text(
-        relevance
-    )
-
-    if relevance in [
-
-        "CORE LOCAL",
-
-        "KARATINA-NYERI CORRIDOR"
-
-    ]:
-
-        return 3
-
-    if (
-
-        "KARATINA" in location
-
-        or
-
-        "NYERI" in location
-
-    ):
-
-        return 3
-
-    if relevance == "WIDER / OTHER":
-
-        return 1
-
-    return 0
-
-
-def strength_score(
-    strength
-):
-
-    strength = normalize_text(
-        strength
-    )
-
-    scores = {
-
-        "HIGH": 3,
-
-        "MEDIUM": 2,
-
-        "LOW": 1
-
-    }
-
-    return scores.get(
-        strength,
-        0
-    )
-
-
-def evidence_quality(
-    row
-):
+        return (
+            "Moderate margin. Your price provides some room, "
+            "but competition and product movement still matter."
+        )
 
     return (
-
-        source_score(
-            row.get(
-                "source_type",
-                ""
-            )
-        )
-
-        +
-
-        geography_score(
-            row.get(
-                "location",
-                ""
-            ),
-
-            row.get(
-                "geographic_relevance",
-                ""
-            )
-        )
-
-        +
-
-        strength_score(
-            row.get(
-                "evidence_strength",
-                ""
-            )
-        )
-
+        "Healthy room in the current selling price. "
+        "Still consider competition and how quickly the "
+        "product moves."
     )
 
 
 # ============================================================
-# MARKET INTELLIGENCE
+# SESSION STATE
 # ============================================================
 
-def market_intelligence(
-    product,
-    evidence
-):
+if "purchase_data" not in st.session_state:
+    st.session_state.purchase_data = None
 
-    result = {
+if "pricing_data" not in st.session_state:
+    st.session_state.pricing_data = None
 
-        "low": None,
+if "pricing_strategy" not in st.session_state:
+    st.session_state.pricing_strategy = {}
 
-        "high": None,
-
-        "median": None,
-
-        "spread": None,
-
-        "count": 0,
-
-        "confidence": "None",
-
-        "trend": "Unknown",
-
-        "status": "No evidence",
-
-        "sources": []
-
-    }
-
-
-    if evidence.empty:
-
-        return result
-
-
-    matches = evidence[
-
-        evidence["product"]
-        .apply(normalize_text)
-
-        ==
-
-        normalize_text(product)
-
-    ].copy()
-
-
-    if matches.empty:
-
-        return result
-
-
-    matches["quality"] = (
-        matches.apply(
-            evidence_quality,
-            axis=1
-        )
-    )
-
-
-    local = matches[
-
-        matches[
-            "geographic_relevance"
-        ]
-        .apply(normalize_text)
-        .isin([
-
-            "CORE LOCAL",
-
-            "KARATINA-NYERI CORRIDOR"
-
-        ])
-
-    ].copy()
-
-
-    local = local[
-        local["quality"] >= 5
-    ]
-
-
-    if len(local) >= 2:
-
-        working = local
-
-        status = (
-            "Local evidence available"
-        )
-
-    else:
-
-        broader = matches[
-            matches["quality"] >= 4
-        ]
-
-        if len(broader) >= 2:
-
-            working = broader
-
-            status = (
-                "Broader reference only"
-            )
-
-        else:
-
-            return result
-
-
-    prices = working[
-        "price"
-    ]
-
-
-    result["low"] = prices.min()
-
-    result["high"] = prices.max()
-
-    result["median"] = prices.median()
-
-    result["spread"] = (
-
-        result["high"]
-
-        -
-
-        result["low"]
-
-    )
-
-    result["count"] = len(
-        working
-    )
-
-    result["status"] = status
-
-
-    result["sources"] = (
-        working["source"]
-        .dropna()
-        .unique()
-        .tolist()
-    )
-
-
-    # --------------------------------------------------------
-    # CONFIDENCE
-    # --------------------------------------------------------
-
-    if len(working) >= 5:
-
-        result["confidence"] = "High"
-
-    elif len(working) >= 3:
-
-        result["confidence"] = "Medium"
-
-    else:
-
-        result["confidence"] = "Low"
-
-
-    # --------------------------------------------------------
-    # TREND
-    # --------------------------------------------------------
-
-    working["date_parsed"] = pd.to_datetime(
-
-        working["date"],
-
-        errors="coerce"
-
-    )
-
-
-    dated = working.dropna(
-        subset=["date_parsed"]
-    ).sort_values(
-        "date_parsed"
-    )
-
-
-    if len(dated) >= 3:
-
-        half = max(
-            1,
-            len(dated) // 2
-        )
-
-        older = dated.head(
-            half
-        )["price"].mean()
-
-        recent = dated.tail(
-            half
-        )["price"].mean()
-
-
-        if recent > older * 1.02:
-
-            result["trend"] = "Rising"
-
-        elif recent < older * 0.98:
-
-            result["trend"] = "Falling"
-
-        else:
-
-            result["trend"] = "Stable"
-
-
-    return result
+if "invoice_name" not in st.session_state:
+    st.session_state.invoice_name = ""
 
 
 # ============================================================
-# MOVEMENT
+# 1. INVOICE UPLOAD
 # ============================================================
 
-def movement_class(
-    quantity
-):
-
-    if quantity >= 50:
-
-        return "Fast"
-
-    if quantity >= 10:
-
-        return "Medium"
-
-    return "Slow"
-
-
-# ============================================================
-# COMPETITIVENESS
-# ============================================================
-
-def competitive_pressure(
-    intelligence
-):
-
-    if (
-
-        intelligence["median"] is None
-
-        or
-
-        intelligence["median"] <= 0
-
-    ):
-
-        return "Unknown"
-
-
-    spread_percent = (
-
-        intelligence["spread"]
-
-        /
-
-        intelligence["median"]
-
-    ) * 100
-
-
-    if spread_percent <= 4:
-
-        return "High"
-
-    if spread_percent <= 8:
-
-        return "Medium"
-
-    return "Low"
-
-
-# ============================================================
-# PRICING STRATEGY
-# ============================================================
-
-def pricing_strategy(
-    buying_price,
-    intelligence,
-    movement
-):
-
-    # --------------------------------------------------------
-    # NO MARKET DATA
-    # --------------------------------------------------------
-
-    if intelligence["median"] is None:
-
-        target_margin = 5
-
-        price = (
-
-            buying_price
-
-            /
-
-            (1 - target_margin / 100)
-
-        )
-
-        return {
-
-            "recommended": round(
-                price,
-                2
-            ),
-
-            "target_margin":
-                target_margin,
-
-            "reason":
-                "No verified market evidence. "
-                "Using a temporary cost-based fallback."
-
-        }
-
-
-    # --------------------------------------------------------
-    # MOVEMENT STRATEGY
-    # --------------------------------------------------------
-
-    if movement == "Fast":
-
-        target_margin = 3.5
-
-    elif movement == "Medium":
-
-        target_margin = 5
-
-    else:
-
-        target_margin = 7
-
-
-    cost_floor = (
-
-        buying_price
-
-        /
-
-        (1 - target_margin / 100)
-
-    )
-
-
-    market_price = (
-        intelligence["median"]
-    )
-
-
-    # --------------------------------------------------------
-    # RECOMMENDATION
-    # --------------------------------------------------------
-
-    recommended = max(
-
-        market_price,
-
-        cost_floor
-
-    )
-
-
-    if movement == "Fast":
-
-        reason = (
-
-            "Fast-moving product. "
-            "The strategy prioritizes "
-            "competitive turnover."
-
-        )
-
-    elif movement == "Medium":
-
-        reason = (
-
-            "Medium-moving product. "
-            "The strategy balances "
-            "margin and competitiveness."
-
-        )
-
-    else:
-
-        reason = (
-
-            "Slow-moving product. "
-            "The strategy protects margin "
-            "because capital may remain tied up."
-
-        )
-
-
-    return {
-
-        "recommended":
-            round(
-                recommended,
-                2
-            ),
-
-        "target_margin":
-            target_margin,
-
-        "reason":
-            reason
-
-    }
-
-
-# ============================================================
-# WATCHLIST
-# ============================================================
-
-def build_watchlist(
-    pricing_data,
-    evidence
-):
-
-    rows = []
-
-
-    for product in pricing_data[
-        "Product"
-    ].unique():
-
-        intel = market_intelligence(
-            product,
-            evidence
-        )
-
-
-        if (
-
-            intel["count"] < 3
-
-            or
-
-            intel["confidence"]
-            == "Low"
-
-        ):
-
-            rows.append({
-
-                "Product":
-                    product,
-
-                "Status":
-                    "Needs market research"
-
-            })
-
-
-    return pd.DataFrame(
-        rows
-    )
-
-
-# ============================================================
-# PURCHASE IMPORT
-# ============================================================
-
-st.subheader(
-    "1. Today's Purchases"
-)
-
+st.header("1. Upload Purchase Invoice")
 
 uploaded_file = st.file_uploader(
-
-    "Upload QuickBooks purchase file",
-
-    type=[
-        "xlsx",
-        "xls"
-    ]
-
+    "Upload the Excel file exported from QuickBooks",
+    type=["xlsx", "xls"],
+    help="Use the same QuickBooks Excel format you normally export."
 )
 
 
@@ -830,33 +184,45 @@ if uploaded_file is not None:
 
     try:
 
-        data = pd.read_excel(
+        # ----------------------------------------------------
+        # READ RAW EXCEL
+        # ----------------------------------------------------
 
+        raw_data = pd.read_excel(
             uploaded_file,
-
-            sheet_name="Sheet1",
-
-            header=0
-
+            sheet_name=0,
+            header=None
         )
 
+        # ----------------------------------------------------
+        # FIND ACTUAL HEADER
+        # ----------------------------------------------------
 
-        data.columns = (
-
-            data.columns
-            .astype(str)
-            .str.replace(
-                "\xa0",
-                " ",
-                regex=False
-            )
-            .str.strip()
-
+        header_row = find_header_row(
+            raw_data
         )
 
+        data = pd.read_excel(
+            uploaded_file,
+            sheet_name=0,
+            header=header_row
+        )
 
-        required = [
+        data.columns = [
+            normalize_column(column)
+            for column in data.columns
+        ]
 
+        # Remove completely empty rows
+        data = data.dropna(
+            how="all"
+        ).copy()
+
+        # ----------------------------------------------------
+        # REQUIRED QUICKBOOKS COLUMNS
+        # ----------------------------------------------------
+
+        required_columns = [
             "Date",
             "Num",
             "Memo",
@@ -864,904 +230,550 @@ if uploaded_file is not None:
             "Qty",
             "U/M",
             "Cost Price"
-
         ]
 
-
-        missing = [
-
-            c for c in required
-
-            if c not in data.columns
-
+        missing_columns = [
+            column
+            for column in required_columns
+            if column not in data.columns
         ]
 
-
-        if missing:
+        if missing_columns:
 
             st.error(
-                "Missing columns: "
-                + ", ".join(missing)
+                "The QuickBooks structure could not be "
+                "fully recognized."
+            )
+
+            st.write(
+                "Columns detected:"
+            )
+
+            st.write(
+                list(data.columns)
             )
 
             st.stop()
 
+        # ----------------------------------------------------
+        # CLEAN DATA
+        # ----------------------------------------------------
 
-        data["Memo"] = (
-            data["Memo"]
-            .apply(clean_text)
-        )
+        for column in [
+            "Date",
+            "Num",
+            "Memo",
+            "Item",
+            "U/M"
+        ]:
 
-
-        data["Cost Price"] = pd.to_numeric(
-
-            data["Cost Price"],
-
-            errors="coerce"
-
-        )
-
+            data[column] = (
+                data[column]
+                .apply(clean_text)
+            )
 
         data["Qty"] = pd.to_numeric(
-
             data["Qty"],
-
             errors="coerce"
-
         )
 
+        data["Cost Price"] = pd.to_numeric(
+            data["Cost Price"],
+            errors="coerce"
+        )
+
+        if "Amount" in data.columns:
+
+            data["Amount"] = pd.to_numeric(
+                data["Amount"],
+                errors="coerce"
+            )
+
+        if "Balance" in data.columns:
+
+            data["Balance"] = pd.to_numeric(
+                data["Balance"],
+                errors="coerce"
+            )
+
+        # ----------------------------------------------------
+        # REMOVE QUICKBOOKS TOTAL / EMPTY ROWS
+        # ----------------------------------------------------
 
         data = data[
-
-            (data["Memo"] != "")
-
-            &
-
-            data["Cost Price"].notna()
-
+            data["Memo"].astype(str).str.strip() != ""
         ].copy()
 
+        data = data[
+            data["Cost Price"].notna()
+        ].copy()
 
-        pricing_data = pd.DataFrame({
+        # ----------------------------------------------------
+        # CREATE CLEAN PURCHASE TABLE
+        # ----------------------------------------------------
 
-            "Product":
-                data["Memo"],
+        purchase_columns = [
+            "Date",
+            "Num",
+            "Memo",
+            "Item",
+            "Qty",
+            "U/M",
+            "Cost Price"
+        ]
 
-            "Buying Price":
-                data["Cost Price"],
+        if "Amount" in data.columns:
+            purchase_columns.append("Amount")
 
-            "Quantity":
-                data["Qty"],
+        if "Balance" in data.columns:
+            purchase_columns.append("Balance")
 
-            "Unit":
-                data["U/M"],
+        purchase_data = data[
+            purchase_columns
+        ].copy()
 
-            "Purchase Date":
-                data["Date"],
+        # ----------------------------------------------------
+        # CREATE PRICING TABLE
+        # ----------------------------------------------------
 
-            "Current Selling Price":
-                None,
+        pricing_data = pd.DataFrame()
 
-            "Margin":
-                None
-
-        })
-
-
-        st.session_state[
-            "pricing_data"
-        ] = pricing_data
-
-
-        st.success(
-
-            f"{len(pricing_data)} "
-            "products imported."
-
+        pricing_data["Product"] = (
+            purchase_data["Memo"]
         )
 
+        pricing_data["Buying Price"] = (
+            purchase_data["Cost Price"]
+        )
+
+        pricing_data["Qty"] = (
+            purchase_data["Qty"]
+        )
+
+        pricing_data["U/M"] = (
+            purchase_data["U/M"]
+        )
+
+        pricing_data["Current Selling Price"] = 0.0
+
+        pricing_data["Markup"] = np.nan
+
+        pricing_data["Margin"] = np.nan
+
+        pricing_data["Pricing Approach"] = ""
+
+        pricing_data["Observation"] = (
+            "Enter selling price"
+        )
+
+        # ----------------------------------------------------
+        # SAVE
+        # ----------------------------------------------------
+
+        st.session_state.purchase_data = (
+            purchase_data
+        )
+
+        st.session_state.pricing_data = (
+            pricing_data
+        )
+
+        st.session_state.invoice_name = (
+            uploaded_file.name
+        )
+
+        st.success(
+            f"{len(pricing_data)} products detected successfully."
+        )
 
     except Exception as error:
 
         st.error(
-            f"Could not process file: {error}"
+            f"We could not process this QuickBooks file: {error}"
         )
 
 
 # ============================================================
-# PRICING WORKSPACE
+# 2. INVOICE SUMMARY
 # ============================================================
 
-if "pricing_data" in st.session_state:
+if st.session_state.purchase_data is not None:
 
-    pricing_data = st.session_state[
-        "pricing_data"
-    ]
+    purchase_data = (
+        st.session_state.purchase_data
+    )
 
+    pricing_data = (
+        st.session_state.pricing_data
+    )
 
     st.divider()
 
-    st.subheader(
-        "2. Market Intelligence"
-    )
-
-
-    selected_product = st.selectbox(
-
-        "Select product",
-
-        pricing_data[
-            "Product"
-        ].tolist()
-
-    )
-
-
-    selected_index = pricing_data[
-
-        pricing_data["Product"]
-        == selected_product
-
-    ].index[0]
-
-
-    selected_row = pricing_data.loc[
-        selected_index
-    ]
-
-
-    intelligence = market_intelligence(
-
-        selected_product,
-
-        market_evidence
-
-    )
-
-
-    movement = movement_class(
-
-        float(
-            selected_row["Quantity"]
-        )
-
-    )
-
-
-    # ========================================================
-    # MARKET DISPLAY
-    # ========================================================
-
-    if intelligence["median"] is None:
-
-        st.warning(
-            "No verified local market evidence "
-            "is currently available."
-        )
-
-    else:
-
-        c1, c2, c3, c4 = st.columns(4)
-
-
-        with c1:
-
-            st.metric(
-
-                "Market Low",
-
-                f"KES "
-                f"{intelligence['low']:,.2f}"
-
-            )
-
-
-        with c2:
-
-            st.metric(
-
-                "Market High",
-
-                f"KES "
-                f"{intelligence['high']:,.2f}"
-
-            )
-
-
-        with c3:
-
-            st.metric(
-
-                "Market Median",
-
-                f"KES "
-                f"{intelligence['median']:,.2f}"
-
-            )
-
-
-        with c4:
-
-            st.metric(
-
-                "Evidence",
-
-                intelligence["confidence"]
-
-            )
-
-
-        st.write(
-
-            f"**Trend:** "
-            f"{intelligence['trend']}"
-
-        )
-
-
-        st.write(
-
-            f"**Competitive pressure:** "
-            f"{competitive_pressure(intelligence)}"
-
-        )
-
-
-        st.write(
-
-            "**Sources:** "
-
-            +
-
-            ", ".join(
-                intelligence["sources"]
-            )
-
-        )
-
-
-    # ========================================================
-    # MARKET AGENT
-    # ========================================================
-
-    st.divider()
-
-    st.subheader(
-        "3. Market Intelligence Agent"
-    )
-
-
-    watchlist = build_watchlist(
-
-        pricing_data,
-
-        market_evidence
-
-    )
-
-
-    if watchlist.empty:
-
-        st.success(
-            "All current products have adequate evidence."
-        )
-
-    else:
-
-        st.info(
-
-            f"{len(watchlist)} products "
-            "require fresh market research."
-
-        )
-
-        st.dataframe(
-
-            watchlist,
-
-            use_container_width=True,
-
-            hide_index=True
-
-        )
-
-
-    st.button(
-        "Run Market Research Agent",
-        type="primary"
-    )
-
-
-    st.caption(
-
-        "Live web research will be connected here. "
-        "The agent will prioritize KAMIS, then verified "
-        "Karatina/Nyeri wholesale sources, then broader "
-        "Kenyan sources."
-
-    )
-
-
-    # ========================================================
-    # MOVEMENT
-    # ========================================================
-
-    st.divider()
-
-    st.subheader(
-        "4. Product Movement"
-    )
-
-
-    st.metric(
-        "Movement",
-        movement
-    )
-
-
-    # ========================================================
-    # PRICING
-    # ========================================================
-
-    st.divider()
-
-    st.subheader(
-        "5. Pricing Strategy"
-    )
-
-
-    strategy = pricing_strategy(
-
-        float(
-            selected_row[
-                "Buying Price"
-            ]
-        ),
-
-        intelligence,
-
-        movement
-
-    )
-
-
-    st.success(
-
-        f"Recommended Price: "
-        f"KES "
-        f"{strategy['recommended']:,.2f}"
-
-    )
-
-
-    st.write(
-
-        f"**Target margin:** "
-        f"{strategy['target_margin']:.1f}%"
-
-    )
-
-
-    st.info(
-        strategy["reason"]
-    )
-
-
-    # ========================================================
-    # OWNER PRICE
-    # ========================================================
-
-    st.divider()
-
-    current_price = st.number_input(
-
-        "Your Current Selling Price (KES)",
-
-        min_value=0.0,
-
-        step=1.0,
-
-        format="%.2f"
-
-    )
-
-
-    if current_price > 0:
-
-        buying_price = float(
-
-            selected_row[
-                "Buying Price"
-            ]
-
-        )
-
-
-        margin = calculate_margin(
-
-            buying_price,
-
-            current_price
-
-        )
-
-
-        profit = (
-
-            current_price
-
-            -
-
-            buying_price
-
-        )
-
-
-        c1, c2 = st.columns(2)
-
-
-        with c1:
-
-            st.metric(
-
-                "Profit",
-
-                f"KES "
-                f"{profit:,.2f}"
-
-            )
-
-
-        with c2:
-
-            st.metric(
-
-                "Margin",
-
-                f"{margin:.2f}%"
-
-            )
-
-
-        if st.button(
-            "Save Owner Price",
-            type="secondary"
-        ):
-
-            pricing_data.at[
-                selected_index,
-                "Current Selling Price"
-            ] = current_price
-
-
-            pricing_data.at[
-                selected_index,
-                "Margin"
-            ] = margin
-
-
-            st.session_state[
-                "pricing_data"
-            ] = pricing_data
-
-
-            st.success(
-                "Owner price saved."
-            )
-
-
-# ============================================================
-# EVIDENCE DATABASE
-# ============================================================
-
-st.divider()
-
-st.subheader(
-    "6. Market Evidence Database"
-)
-
-
-if market_evidence.empty:
-
-    st.info(
-        "No verified market evidence has been collected yet."
-    )
-
-else:
-
-    st.dataframe(
-
-        market_evidence,
-
-        use_container_width=True,
-
-        hide_index=True
-
-    )
-
-
-# ============================================================
-# SOURCE REGISTRY
-# ============================================================
-
-st.divider()
-
-st.subheader(
-    "7. Market Source Registry"
-)
-
-
-if source_registry.empty:
-
-    st.warning(
-        "source_registry.csv was not found."
-    )
-
-else:
-
-    st.dataframe(
-
-        source_registry,
-
-        use_container_width=True,
-
-        hide_index=True
-
-    )
-# ============================================================
-# CEO PRICING DECISION BOARD
-# ============================================================
-
-st.divider()
-
-st.subheader("8. CEO Pricing Decision Board")
-
-st.caption(
-    "A quick view of where attention is needed today."
-)
-
-
-if "pricing_data" in st.session_state:
-
-    pricing_data = st.session_state["pricing_data"].copy()
-
+    st.header("2. Purchase Review")
 
     # --------------------------------------------------------
-    # ANALYSE TODAY'S PRODUCTS
+    # SUMMARY
     # --------------------------------------------------------
 
-    decision_rows = []
+    invoice_number = "—"
 
+    if "Num" in purchase_data.columns:
 
-    for index, row in pricing_data.iterrows():
-
-        product = row["Product"]
-
-        buying_price = float(
-            row["Buying Price"]
-        )
-
-        quantity = float(
-            row["Quantity"]
-        )
-
-
-        intelligence = market_intelligence(
-            product,
-            market_evidence
-        )
-
-
-        movement = movement_class(
-            quantity
-        )
-
-
-        # ----------------------------------------------------
-        # MARKET POSITION
-        # ----------------------------------------------------
-
-        current_price = row[
-            "Current Selling Price"
+        numbers = [
+            value
+            for value in purchase_data["Num"].tolist()
+            if clean_text(value)
         ]
 
+        if numbers:
+            invoice_number = numbers[0]
 
-        if pd.notna(current_price):
+    invoice_date = "—"
 
-            current_price = float(
-                current_price
+    if "Date" in purchase_data.columns:
+
+        dates = purchase_data["Date"].dropna()
+
+        if not dates.empty:
+            invoice_date = clean_text(
+                dates.iloc[0]
             )
 
-        else:
+    col1, col2, col3 = st.columns(3)
 
-            current_price = None
+    with col1:
+
+        st.metric(
+            "Invoice",
+            invoice_number
+        )
+
+    with col2:
+
+        st.metric(
+            "Invoice Date",
+            invoice_date
+        )
+
+    with col3:
+
+        st.metric(
+            "Products Detected",
+            len(pricing_data)
+        )
+
+    st.success(
+        "Ready for review"
+    )
+
+    # --------------------------------------------------------
+    # ORIGINAL QUICKBOOKS INFORMATION
+    # --------------------------------------------------------
+
+    st.subheader(
+        "Purchase Information"
+    )
+
+    st.caption(
+        "This keeps the information from your QuickBooks "
+        "export visible and familiar."
+    )
+
+    purchase_display = purchase_data.copy()
+
+    st.dataframe(
+        purchase_display,
+        use_container_width=True,
+        hide_index=True
+    )
 
 
-        if intelligence["median"] is not None:
+# ============================================================
+# 3. PRICING WORKSPACE
+# ============================================================
 
-            market_median = float(
-                intelligence["median"]
+if st.session_state.pricing_data is not None:
+
+    pricing_data = (
+        st.session_state.pricing_data
+        .copy()
+    )
+
+    st.divider()
+
+    st.header("3. Pricing Workspace")
+
+    st.caption(
+        "Enter the current selling price. "
+        "Markup and margin are calculated automatically."
+    )
+
+    # --------------------------------------------------------
+    # PRODUCT PRICING INPUT
+    # --------------------------------------------------------
+
+    for index in pricing_data.index:
+
+        product = pricing_data.at[
+            index,
+            "Product"
+        ]
+
+        buying_price = float(
+            pricing_data.at[
+                index,
+                "Buying Price"
+            ]
+        )
+
+        quantity = pricing_data.at[
+            index,
+            "Qty"
+        ]
+
+        unit = pricing_data.at[
+            index,
+            "U/M"
+        ]
+
+        with st.container():
+
+            st.markdown(
+                f"### {product}"
             )
 
+            col1, col2, col3 = st.columns(3)
 
-            if current_price is None:
+            with col1:
 
-                position = "Not priced"
+                st.write(
+                    "**Buying Price**"
+                )
 
-            elif current_price < market_median * 0.97:
+                st.write(
+                    f"KES {buying_price:,.2f}"
+                )
 
-                position = "Below market"
+            with col2:
 
-            elif current_price > market_median * 1.03:
+                st.write(
+                    "**Quantity**"
+                )
 
-                position = "Above market"
+                st.write(
+                    f"{quantity:g} {unit}"
+                )
+
+            with col3:
+
+                current_price = st.number_input(
+                    "Current Selling Price",
+                    min_value=0.0,
+                    value=float(
+                        pricing_data.at[
+                            index,
+                            "Current Selling Price"
+                        ]
+                    ),
+                    step=1.0,
+                    key=f"selling_{index}"
+                )
+
+            # ------------------------------------------------
+            # CALCULATIONS
+            # ------------------------------------------------
+
+            if current_price > 0:
+
+                markup = calculate_markup(
+                    buying_price,
+                    current_price
+                )
+
+                margin = calculate_margin(
+                    buying_price,
+                    current_price
+                )
+
+                pricing_data.at[
+                    index,
+                    "Current Selling Price"
+                ] = current_price
+
+                pricing_data.at[
+                    index,
+                    "Markup"
+                ] = markup
+
+                pricing_data.at[
+                    index,
+                    "Margin"
+                ] = margin
+
+                pricing_data.at[
+                    index,
+                    "Observation"
+                ] = pricing_observation(
+                    margin,
+                    markup
+                )
+
+                col1, col2, col3 = st.columns(3)
+
+                with col1:
+
+                    st.metric(
+                        "Profit",
+                        f"KES {current_price - buying_price:,.2f}"
+                    )
+
+                with col2:
+
+                    st.metric(
+                        "Markup",
+                        f"{markup:.2f}%"
+                    )
+
+                with col3:
+
+                    st.metric(
+                        "Margin",
+                        f"{margin:.2f}%"
+                    )
+
+                st.info(
+                    f"**Pricing observation:** "
+                    f"{pricing_data.at[index, 'Observation']}"
+                )
 
             else:
 
-                position = "Around market"
+                st.caption(
+                    "Enter the current selling price "
+                    "to calculate markup and margin."
+                )
+
+            st.divider()
 
 
-        else:
+    # ========================================================
+    # SAVE CURRENT PRICES
+    # ========================================================
 
-            market_median = None
-
-            position = "No market evidence"
-
-
-        # ----------------------------------------------------
-        # MARGIN
-        # ----------------------------------------------------
-
-        if current_price is not None:
-
-            margin = calculate_margin(
-                buying_price,
-                current_price
-            )
-
-        else:
-
-            margin = None
-
-
-        # ----------------------------------------------------
-        # ATTENTION
-        # ----------------------------------------------------
-
-        attention = "Normal"
-
-
-        if intelligence["median"] is None:
-
-            attention = "Research needed"
-
-        elif margin is not None and margin < 3:
-
-            attention = "Thin margin"
-
-        elif position == "Above market":
-
-            attention = "Check competitiveness"
-
-        elif movement == "Fast" and position == "Below market":
-
-            attention = "Review price opportunity"
-
-
-        decision_rows.append({
-
-            "Product": product,
-
-            "Buying Price": buying_price,
-
-            "Market Median": market_median,
-
-            "Selling Price": current_price,
-
-            "Margin %": margin,
-
-            "Movement": movement,
-
-            "Market Position": position,
-
-            "Attention": attention
-
-        })
-
-
-    decision_board = pd.DataFrame(
-        decision_rows
+    st.session_state.pricing_data = (
+        pricing_data
     )
 
-
-    # --------------------------------------------------------
-    # EXECUTIVE METRICS
-    # --------------------------------------------------------
-
-    total_products = len(
-        decision_board
-    )
-
-
-    evidence_available = len(
-        decision_board[
-            decision_board[
-                "Market Median"
-            ].notna()
-        ]
-    )
-
-
-    research_needed = (
-        total_products
-        -
-        evidence_available
-    )
-
-
-    priced_products = len(
-        decision_board[
-            decision_board[
-                "Selling Price"
-            ].notna()
-        ]
-    )
-
-
-    thin_margin = len(
-        decision_board[
-            decision_board[
-                "Margin %"
-            ].notna()
-            &
-            (
-                decision_board[
-                    "Margin %"
-                ] < 3
-            )
-        ]
-    )
-
-
-    c1, c2, c3, c4 = st.columns(4)
-
-
-    with c1:
-
-        st.metric(
-            "Products Today",
-            total_products
-        )
-
-
-    with c2:
-
-        st.metric(
-            "Market Evidence",
-            evidence_available
-        )
-
-
-    with c3:
-
-        st.metric(
-            "Research Needed",
-            research_needed
-        )
-
-
-    with c4:
-
-        st.metric(
-            "Thin Margins",
-            thin_margin
-        )
-
-
-    # --------------------------------------------------------
-    # ATTENTION TABLE
-    # --------------------------------------------------------
-
-    st.markdown(
-        "### Products Requiring Attention"
-    )
-
-
-    attention_board = decision_board[
-        decision_board[
-            "Attention"
-        ] != "Normal"
-    ].copy()
-
-
-    if attention_board.empty:
-
-        st.success(
-            "No immediate pricing issues detected."
-        )
-
-    else:
-
-        st.dataframe(
-
-            attention_board,
-
-            use_container_width=True,
-
-            hide_index=True
-
-        )
-
-
-    # --------------------------------------------------------
-    # FULL DECISION BOARD
-    # --------------------------------------------------------
-
-    st.markdown(
-        "### Today's Pricing View"
-    )
-
-
-    st.dataframe(
-
-        decision_board,
-
-        use_container_width=True,
-
-        hide_index=True
-
-    )
-
-
-    # --------------------------------------------------------
-    # STRATEGIC MESSAGE
-    # --------------------------------------------------------
-
-    if research_needed > 0:
-
-        st.warning(
-
-            f"{research_needed} product(s) need "
-            "fresh market evidence before the system "
-            "can make a strong market-based recommendation."
-
-        )
-
-    elif thin_margin > 0:
-
-        st.warning(
-
-            f"{thin_margin} product(s) have margins "
-            "below 3%. Review these before accepting "
-            "current prices."
-
-        )
-
-    else:
-
-        st.success(
-
-            "Today's pricing portfolio is in a healthy "
-            "decision state based on the evidence currently available."
-
-        )
-
-else:
-
-    st.info(
-        "Upload today's purchase file to activate "
-        "the CEO Pricing Decision Board."
-    )
 
 # ============================================================
-# FOOTER
+# 4. PRICING STRATEGY
+# ============================================================
+
+if st.session_state.pricing_data is not None:
+
+    pricing_data = (
+        st.session_state.pricing_data
+    )
+
+    st.header("4. How Do You Normally Price?")
+
+    st.caption(
+        "We want to understand how you already make pricing decisions. "
+        "The system should learn from your experience rather than "
+        "replace it."
+    )
+
+    strategy_options = [
+        "I follow the market",
+        "I add a fixed amount",
+        "I use a percentage markup",
+        "I check competitors",
+        "I price differently for different customers",
+        "I mainly use my experience",
+        "Other"
+    ]
+
+    selected_strategy = st.radio(
+        "Choose the approach that best describes you:",
+        strategy_options,
+        key="pricing_strategy_main"
+    )
+
+    notes = st.text_area(
+        "Anything else you consider when setting prices?",
+        placeholder=(
+            "For example: fast-moving products, "
+            "regular customers, supplier price changes, "
+            "competition, transport costs..."
+        )
+    )
+
+    if st.button(
+        "Save Pricing Approach",
+        type="primary"
+    ):
+
+        st.session_state.pricing_strategy[
+            "general"
+        ] = selected_strategy
+
+        st.session_state.pricing_strategy[
+            "notes"
+        ] = notes
+
+        st.success(
+            "Your pricing approach has been saved."
+        )
+
+
+# ============================================================
+# 5. FINAL PRICING VIEW
+# ============================================================
+
+if st.session_state.pricing_data is not None:
+
+    st.divider()
+
+    st.header("5. Pricing Summary")
+
+    summary = (
+        st.session_state.pricing_data
+        .copy()
+    )
+
+    summary_columns = [
+        "Product",
+        "Buying Price",
+        "Current Selling Price",
+        "Markup",
+        "Margin",
+        "Observation"
+    ]
+
+    summary_display = summary[
+        summary_columns
+    ].copy()
+
+    st.dataframe(
+        summary_display,
+        use_container_width=True,
+        hide_index=True
+    )
+
+    st.caption(
+        "The current version does not recommend a selling price yet. "
+        "It first learns how the wholesaler actually prices products."
+    )
+
+
+# ============================================================
+# PRODUCT PRINCIPLE
 # ============================================================
 
 st.divider()
 
 st.caption(
-
-    "Market evidence informs the decision. "
-    "The wholesaler retains final pricing authority."
-
+    "The wholesaler remains in control. "
+    "The system calculates, organizes and explains — "
+    "the owner makes the final pricing decision."
 )
