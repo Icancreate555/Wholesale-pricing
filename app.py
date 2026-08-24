@@ -14,6 +14,7 @@ st.set_page_config(
 )
 
 st.title("Wholesale Pricing Workspace")
+
 st.caption(
     "Review your purchases, enter your selling prices, "
     "and understand your margins."
@@ -25,14 +26,13 @@ st.caption(
 # ============================================================
 
 def clean_text(value):
-    """Clean Excel text safely."""
     if pd.isna(value):
         return ""
+
     return str(value).replace("\xa0", " ").strip()
 
 
-def normalize_column(value):
-    """Normalize Excel column names."""
+def clean_column_name(value):
     return (
         clean_text(value)
         .replace("\n", " ")
@@ -41,13 +41,54 @@ def normalize_column(value):
     )
 
 
-def find_header_row(raw_data):
-    """
-    Find the actual QuickBooks header row.
-    This protects us from blank rows above the Excel table.
-    """
+def calculate_markup(buying_price, selling_price):
+    if buying_price <= 0 or selling_price <= 0:
+        return np.nan
 
-    expected = {
+    profit = selling_price - buying_price
+
+    return (profit / buying_price) * 100
+
+
+def calculate_margin(buying_price, selling_price):
+    if selling_price <= 0:
+        return np.nan
+
+    profit = selling_price - buying_price
+
+    return (profit / selling_price) * 100
+
+
+def get_observation(margin):
+    if pd.isna(margin):
+        return "Enter a selling price."
+
+    if margin < 1:
+        return (
+            "Very thin margin. Consider your costs, "
+            "competition and how quickly this product moves."
+        )
+
+    if margin < 3:
+        return (
+            "Thin margin. Check whether this price gives "
+            "the business enough room after other costs."
+        )
+
+    if margin < 5:
+        return (
+            "Moderate margin. Competition and product movement "
+            "still matter when deciding whether to change the price."
+        )
+
+    return (
+        "The current price provides more room for profit. "
+        "Still consider competition and product movement."
+    )
+
+
+def find_header_row(raw_data):
+    expected_columns = {
         "Date",
         "Num",
         "Memo",
@@ -57,97 +98,23 @@ def find_header_row(raw_data):
         "Cost Price"
     }
 
-    for row_number in range(
-        min(20, len(raw_data))
-    ):
+    maximum_rows = min(20, len(raw_data))
 
-        row_values = {
-            normalize_column(value)
+    for row_number in range(maximum_rows):
+
+        values = {
+            clean_column_name(value)
             for value in raw_data.iloc[row_number].tolist()
         }
 
         matches = len(
-            expected.intersection(row_values)
+            expected_columns.intersection(values)
         )
 
         if matches >= 4:
             return row_number
 
     return 0
-
-
-def calculate_markup(
-    buying_price,
-    selling_price
-):
-    """Markup = profit / buying price."""
-
-    if buying_price <= 0 or selling_price <= 0:
-        return np.nan
-
-    profit = selling_price - buying_price
-
-    return (
-        profit / buying_price
-    ) * 100
-
-
-def calculate_margin(
-    buying_price,
-    selling_price
-):
-    """Margin = profit / selling price."""
-
-    if selling_price <= 0:
-        return np.nan
-
-    profit = selling_price - buying_price
-
-    return (
-        profit / selling_price
-    ) * 100
-
-
-def pricing_observation(
-    margin,
-    markup
-):
-    """Simple V1 human-readable observation."""
-
-    if pd.isna(margin):
-
-        return (
-            "Enter your current selling price "
-            "to see your pricing position."
-        )
-
-    if margin < 1:
-
-        return (
-            "Very thin margin. Consider your operating "
-            "costs, customer expectations and how quickly "
-            "this product moves."
-        )
-
-    if margin < 3:
-
-        return (
-            "Thin margin. Check whether this price gives "
-            "the business enough room after other costs."
-        )
-
-    if margin < 5:
-
-        return (
-            "Moderate margin. Your price provides some room, "
-            "but competition and product movement still matter."
-        )
-
-    return (
-        "Healthy room in the current selling price. "
-        "Still consider competition and how quickly the "
-        "product moves."
-    )
 
 
 # ============================================================
@@ -160,241 +127,237 @@ if "purchase_data" not in st.session_state:
 if "pricing_data" not in st.session_state:
     st.session_state.pricing_data = None
 
-if "pricing_strategy" not in st.session_state:
-    st.session_state.pricing_strategy = {}
-
 if "invoice_name" not in st.session_state:
-    st.session_state.invoice_name = ""
+    st.session_state.invoice_name = None
+
+if "pricing_strategy" not in st.session_state:
+    st.session_state.pricing_strategy = None
+
+if "pricing_notes" not in st.session_state:
+    st.session_state.pricing_notes = ""
 
 
 # ============================================================
-# 1. INVOICE UPLOAD
+# 1. UPLOAD PURCHASE INVOICE
 # ============================================================
 
 st.header("1. Upload Purchase Invoice")
 
 uploaded_file = st.file_uploader(
     "Upload the Excel file exported from QuickBooks",
-    type=["xlsx", "xls"],
-    help="Use the same QuickBooks Excel format you normally export."
+    type=["xlsx", "xls"]
 )
 
 
 if uploaded_file is not None:
 
-    try:
+    # Process a new file only when the filename changes.
+    if st.session_state.invoice_name != uploaded_file.name:
 
-        # ----------------------------------------------------
-        # READ RAW EXCEL
-        # ----------------------------------------------------
+        try:
 
-        raw_data = pd.read_excel(
-            uploaded_file,
-            sheet_name=0,
-            header=None
-        )
+            # ------------------------------------------------
+            # READ EXCEL WITHOUT ASSUMING HEADER POSITION
+            # ------------------------------------------------
 
-        # ----------------------------------------------------
-        # FIND ACTUAL HEADER
-        # ----------------------------------------------------
+            raw_data = pd.read_excel(
+                uploaded_file,
+                sheet_name=0,
+                header=None
+            )
 
-        header_row = find_header_row(
-            raw_data
-        )
+            header_row = find_header_row(raw_data)
 
-        data = pd.read_excel(
-            uploaded_file,
-            sheet_name=0,
-            header=header_row
-        )
+            # ------------------------------------------------
+            # READ AGAIN USING THE CORRECT HEADER
+            # ------------------------------------------------
 
-        data.columns = [
-            normalize_column(column)
-            for column in data.columns
-        ]
+            data = pd.read_excel(
+                uploaded_file,
+                sheet_name=0,
+                header=header_row
+            )
 
-        # Remove completely empty rows
-        data = data.dropna(
-            how="all"
-        ).copy()
+            # ------------------------------------------------
+            # CLEAN COLUMN NAMES
+            # ------------------------------------------------
 
-        # ----------------------------------------------------
-        # REQUIRED QUICKBOOKS COLUMNS
-        # ----------------------------------------------------
+            data.columns = [
+                clean_column_name(column)
+                for column in data.columns
+            ]
 
-        required_columns = [
-            "Date",
-            "Num",
-            "Memo",
-            "Item",
-            "Qty",
-            "U/M",
-            "Cost Price"
-        ]
+            # ------------------------------------------------
+            # CHECK REQUIRED COLUMNS
+            # ------------------------------------------------
 
-        missing_columns = [
-            column
-            for column in required_columns
-            if column not in data.columns
-        ]
+            required_columns = [
+                "Date",
+                "Num",
+                "Memo",
+                "Item",
+                "Qty",
+                "U/M",
+                "Cost Price"
+            ]
 
-        if missing_columns:
+            missing_columns = [
+                column
+                for column in required_columns
+                if column not in data.columns
+            ]
+
+            if missing_columns:
+
+                st.error(
+                    "The QuickBooks file is missing these columns: "
+                    + ", ".join(missing_columns)
+                )
+
+                st.write("Columns detected in the file:")
+
+                st.write(
+                    list(data.columns)
+                )
+
+                st.stop()
+
+            # ------------------------------------------------
+            # CLEAN TEXT COLUMNS
+            # ------------------------------------------------
+
+            text_columns = [
+                "Date",
+                "Num",
+                "Memo",
+                "Item",
+                "U/M"
+            ]
+
+            for column in text_columns:
+
+                data[column] = (
+                    data[column]
+                    .apply(clean_text)
+                )
+
+            # ------------------------------------------------
+            # CLEAN NUMERIC COLUMNS
+            # ------------------------------------------------
+
+            data["Qty"] = pd.to_numeric(
+                data["Qty"],
+                errors="coerce"
+            )
+
+            data["Cost Price"] = pd.to_numeric(
+                data["Cost Price"],
+                errors="coerce"
+            )
+
+            # ------------------------------------------------
+            # REMOVE EMPTY/TOTAL ROWS
+            # ------------------------------------------------
+
+            data = data[
+                data["Memo"] != ""
+            ].copy()
+
+            data = data[
+                data["Cost Price"].notna()
+            ].copy()
+
+            # ------------------------------------------------
+            # KEEP ORIGINAL QUICKBOOKS INFORMATION
+            # ------------------------------------------------
+
+            purchase_columns = [
+                "Date",
+                "Num",
+                "Memo",
+                "Item",
+                "Qty",
+                "U/M",
+                "Cost Price"
+            ]
+
+            if "Amount" in data.columns:
+                purchase_columns.append("Amount")
+
+            if "Balance" in data.columns:
+                purchase_columns.append("Balance")
+
+            purchase_data = data[
+                purchase_columns
+            ].copy()
+
+            # ------------------------------------------------
+            # CREATE PRICING DATA
+            # ------------------------------------------------
+
+            pricing_data = pd.DataFrame()
+
+            pricing_data["Product"] = (
+                purchase_data["Memo"].values
+            )
+
+            pricing_data["Buying Price"] = (
+                purchase_data["Cost Price"].values
+            )
+
+            pricing_data["Quantity"] = (
+                purchase_data["Qty"].values
+            )
+
+            pricing_data["Unit"] = (
+                purchase_data["U/M"].values
+            )
+
+            pricing_data["Current Selling Price"] = 0.0
+
+            pricing_data["Markup"] = np.nan
+
+            pricing_data["Margin"] = np.nan
+
+            pricing_data["Observation"] = (
+                "Enter selling price"
+            )
+
+            # ------------------------------------------------
+            # SAVE FRESH DATA
+            # ------------------------------------------------
+
+            st.session_state.purchase_data = (
+                purchase_data
+            )
+
+            st.session_state.pricing_data = (
+                pricing_data
+            )
+
+            st.session_state.invoice_name = (
+                uploaded_file.name
+            )
+
+            st.session_state.pricing_strategy = None
+
+            st.session_state.pricing_notes = ""
+
+            st.success(
+                f"{len(pricing_data)} products detected successfully."
+            )
+
+        except Exception as error:
 
             st.error(
-                "The QuickBooks structure could not be "
-                "fully recognized."
+                "We could not process this QuickBooks file."
             )
 
-            st.write(
-                "Columns detected:"
-            )
-
-            st.write(
-                list(data.columns)
-            )
-
-            st.stop()
-
-        # ----------------------------------------------------
-        # CLEAN DATA
-        # ----------------------------------------------------
-
-        for column in [
-            "Date",
-            "Num",
-            "Memo",
-            "Item",
-            "U/M"
-        ]:
-
-            data[column] = (
-                data[column]
-                .apply(clean_text)
-            )
-
-        data["Qty"] = pd.to_numeric(
-            data["Qty"],
-            errors="coerce"
-        )
-
-        data["Cost Price"] = pd.to_numeric(
-            data["Cost Price"],
-            errors="coerce"
-        )
-
-        if "Amount" in data.columns:
-
-            data["Amount"] = pd.to_numeric(
-                data["Amount"],
-                errors="coerce"
-            )
-
-        if "Balance" in data.columns:
-
-            data["Balance"] = pd.to_numeric(
-                data["Balance"],
-                errors="coerce"
-            )
-
-        # ----------------------------------------------------
-        # REMOVE QUICKBOOKS TOTAL / EMPTY ROWS
-        # ----------------------------------------------------
-
-        data = data[
-            data["Memo"].astype(str).str.strip() != ""
-        ].copy()
-
-        data = data[
-            data["Cost Price"].notna()
-        ].copy()
-
-        # ----------------------------------------------------
-        # CREATE CLEAN PURCHASE TABLE
-        # ----------------------------------------------------
-
-        purchase_columns = [
-            "Date",
-            "Num",
-            "Memo",
-            "Item",
-            "Qty",
-            "U/M",
-            "Cost Price"
-        ]
-
-        if "Amount" in data.columns:
-            purchase_columns.append("Amount")
-
-        if "Balance" in data.columns:
-            purchase_columns.append("Balance")
-
-        purchase_data = data[
-            purchase_columns
-        ].copy()
-
-        # ----------------------------------------------------
-        # CREATE PRICING TABLE
-        # ----------------------------------------------------
-
-        pricing_data = pd.DataFrame()
-
-        pricing_data["Product"] = (
-            purchase_data["Memo"]
-        )
-
-        pricing_data["Buying Price"] = (
-            purchase_data["Cost Price"]
-        )
-
-        pricing_data["Qty"] = (
-            purchase_data["Qty"]
-        )
-
-        pricing_data["U/M"] = (
-            purchase_data["U/M"]
-        )
-
-        pricing_data["Current Selling Price"] = 0.0
-
-        pricing_data["Markup"] = np.nan
-
-        pricing_data["Margin"] = np.nan
-
-        pricing_data["Pricing Approach"] = ""
-
-        pricing_data["Observation"] = (
-            "Enter selling price"
-        )
-
-        # ----------------------------------------------------
-        # SAVE
-        # ----------------------------------------------------
-
-        st.session_state.purchase_data = (
-            purchase_data
-        )
-
-        st.session_state.pricing_data = (
-            pricing_data
-        )
-
-        st.session_state.invoice_name = (
-            uploaded_file.name
-        )
-
-        st.success(
-            f"{len(pricing_data)} products detected successfully."
-        )
-
-    except Exception as error:
-
-        st.error(
-            f"We could not process this QuickBooks file: {error}"
-        )
+            st.exception(error)
 
 
 # ============================================================
-# 2. INVOICE SUMMARY
+# 2. PURCHASE REVIEW
 # ============================================================
 
 if st.session_state.purchase_data is not None:
@@ -412,7 +375,7 @@ if st.session_state.purchase_data is not None:
     st.header("2. Purchase Review")
 
     # --------------------------------------------------------
-    # SUMMARY
+    # INVOICE SUMMARY
     # --------------------------------------------------------
 
     invoice_number = "—"
@@ -420,24 +383,26 @@ if st.session_state.purchase_data is not None:
     if "Num" in purchase_data.columns:
 
         numbers = [
-            value
-            for value in purchase_data["Num"].tolist()
-            if clean_text(value)
+            clean_text(value)
+            for value in purchase_data["Num"]
+            if clean_text(value) != ""
         ]
 
-        if numbers:
+        if len(numbers) > 0:
             invoice_number = numbers[0]
 
     invoice_date = "—"
 
     if "Date" in purchase_data.columns:
 
-        dates = purchase_data["Date"].dropna()
+        dates = [
+            clean_text(value)
+            for value in purchase_data["Date"]
+            if clean_text(value) != ""
+        ]
 
-        if not dates.empty:
-            invoice_date = clean_text(
-                dates.iloc[0]
-            )
+        if len(dates) > 0:
+            invoice_date = dates[0]
 
     col1, col2, col3 = st.columns(3)
 
@@ -467,7 +432,7 @@ if st.session_state.purchase_data is not None:
     )
 
     # --------------------------------------------------------
-    # ORIGINAL QUICKBOOKS INFORMATION
+    # ORIGINAL PURCHASE TABLE
     # --------------------------------------------------------
 
     st.subheader(
@@ -475,14 +440,11 @@ if st.session_state.purchase_data is not None:
     )
 
     st.caption(
-        "This keeps the information from your QuickBooks "
-        "export visible and familiar."
+        "This is the information imported from your QuickBooks file."
     )
 
-    purchase_display = purchase_data.copy()
-
     st.dataframe(
-        purchase_display,
+        purchase_data,
         use_container_width=True,
         hide_index=True
     )
@@ -494,30 +456,32 @@ if st.session_state.purchase_data is not None:
 
 if st.session_state.pricing_data is not None:
 
-    pricing_data = (
-        st.session_state.pricing_data
-        .copy()
-    )
-
     st.divider()
 
     st.header("3. Pricing Workspace")
 
     st.caption(
         "Enter the current selling price. "
-        "Markup and margin are calculated automatically."
+        "The system calculates profit, markup and margin."
+    )
+
+    pricing_data = (
+        st.session_state.pricing_data
+        .copy()
     )
 
     # --------------------------------------------------------
-    # PRODUCT PRICING INPUT
+    # PRODUCT LOOP
     # --------------------------------------------------------
 
     for index in pricing_data.index:
 
-        product = pricing_data.at[
-            index,
-            "Product"
-        ]
+        product = clean_text(
+            pricing_data.at[
+                index,
+                "Product"
+            ]
+        )
 
         buying_price = float(
             pricing_data.at[
@@ -528,137 +492,165 @@ if st.session_state.pricing_data is not None:
 
         quantity = pricing_data.at[
             index,
-            "Qty"
+            "Quantity"
         ]
 
-        unit = pricing_data.at[
-            index,
-            "U/M"
-        ]
+        unit = clean_text(
+            pricing_data.at[
+                index,
+                "Unit"
+            ]
+        )
 
-        with st.container():
+        st.markdown(
+            f"### {product}"
+        )
 
-            st.markdown(
-                f"### {product}"
+        col1, col2, col3 = st.columns(3)
+
+        # ----------------------------------------------------
+        # BUYING PRICE
+        # ----------------------------------------------------
+
+        with col1:
+
+            st.write(
+                "**Buying Price**"
             )
 
-            col1, col2, col3 = st.columns(3)
+            st.write(
+                f"KES {buying_price:,.2f}"
+            )
 
-            with col1:
+        # ----------------------------------------------------
+        # QUANTITY
+        # ----------------------------------------------------
+
+        with col2:
+
+            st.write(
+                "**Quantity**"
+            )
+
+            if pd.isna(quantity):
 
                 st.write(
-                    "**Buying Price**"
+                    f"— {unit}"
                 )
 
-                st.write(
-                    f"KES {buying_price:,.2f}"
-                )
-
-            with col2:
-
-                st.write(
-                    "**Quantity**"
-                )
+            else:
 
                 st.write(
                     f"{quantity:g} {unit}"
                 )
 
-            with col3:
+        # ----------------------------------------------------
+        # SELLING PRICE
+        # ----------------------------------------------------
 
-                current_price = st.number_input(
-                    "Current Selling Price",
-                    min_value=0.0,
-                    value=float(
-                        pricing_data.at[
-                            index,
-                            "Current Selling Price"
-                        ]
-                    ),
-                    step=1.0,
-                    key=f"selling_{index}"
-                )
+        with col3:
+
+            selling_price = st.number_input(
+                "Current Selling Price (KES)",
+                min_value=0.0,
+                step=1.0,
+                value=float(
+                    pricing_data.at[
+                        index,
+                        "Current Selling Price"
+                    ]
+                ),
+                key=f"selling_price_{index}"
+            )
+
+        # ----------------------------------------------------
+        # CALCULATE
+        # ----------------------------------------------------
+
+        if selling_price > 0:
+
+            profit = (
+                selling_price
+                - buying_price
+            )
+
+            markup = calculate_markup(
+                buying_price,
+                selling_price
+            )
+
+            margin = calculate_margin(
+                buying_price,
+                selling_price
+            )
+
+            observation = get_observation(
+                margin
+            )
+
+            pricing_data.at[
+                index,
+                "Current Selling Price"
+            ] = selling_price
+
+            pricing_data.at[
+                index,
+                "Markup"
+            ] = markup
+
+            pricing_data.at[
+                index,
+                "Margin"
+            ] = margin
+
+            pricing_data.at[
+                index,
+                "Observation"
+            ] = observation
 
             # ------------------------------------------------
-            # CALCULATIONS
+            # RESULTS
             # ------------------------------------------------
 
-            if current_price > 0:
+            result1, result2, result3 = st.columns(3)
 
-                markup = calculate_markup(
-                    buying_price,
-                    current_price
+            with result1:
+
+                st.metric(
+                    "Profit per Unit",
+                    f"KES {profit:,.2f}"
                 )
 
-                margin = calculate_margin(
-                    buying_price,
-                    current_price
+            with result2:
+
+                st.metric(
+                    "Markup",
+                    f"{markup:.2f}%"
                 )
 
-                pricing_data.at[
-                    index,
-                    "Current Selling Price"
-                ] = current_price
+            with result3:
 
-                pricing_data.at[
-                    index,
-                    "Markup"
-                ] = markup
-
-                pricing_data.at[
-                    index,
-                    "Margin"
-                ] = margin
-
-                pricing_data.at[
-                    index,
-                    "Observation"
-                ] = pricing_observation(
-                    margin,
-                    markup
+                st.metric(
+                    "Margin",
+                    f"{margin:.2f}%"
                 )
 
-                col1, col2, col3 = st.columns(3)
+            st.info(
+                f"**Pricing observation:** {observation}"
+            )
 
-                with col1:
+        else:
 
-                    st.metric(
-                        "Profit",
-                        f"KES {current_price - buying_price:,.2f}"
-                    )
+            st.caption(
+                "Enter the current selling price "
+                "to calculate the pricing information."
+            )
 
-                with col2:
+        st.divider()
 
-                    st.metric(
-                        "Markup",
-                        f"{markup:.2f}%"
-                    )
-
-                with col3:
-
-                    st.metric(
-                        "Margin",
-                        f"{margin:.2f}%"
-                    )
-
-                st.info(
-                    f"**Pricing observation:** "
-                    f"{pricing_data.at[index, 'Observation']}"
-                )
-
-            else:
-
-                st.caption(
-                    "Enter the current selling price "
-                    "to calculate markup and margin."
-                )
-
-            st.divider()
-
-
-    # ========================================================
-    # SAVE CURRENT PRICES
-    # ========================================================
+    # --------------------------------------------------------
+    # SAVE PRICING DATA
+    # --------------------------------------------------------
 
     st.session_state.pricing_data = (
         pricing_data
@@ -666,21 +658,17 @@ if st.session_state.pricing_data is not None:
 
 
 # ============================================================
-# 4. PRICING STRATEGY
+# 4. PRICING APPROACH
 # ============================================================
 
 if st.session_state.pricing_data is not None:
 
-    pricing_data = (
-        st.session_state.pricing_data
+    st.header(
+        "4. How Do You Normally Price?"
     )
 
-    st.header("4. How Do You Normally Price?")
-
     st.caption(
-        "We want to understand how you already make pricing decisions. "
-        "The system should learn from your experience rather than "
-        "replace it."
+        "We want to understand how you already make pricing decisions."
     )
 
     strategy_options = [
@@ -695,16 +683,16 @@ if st.session_state.pricing_data is not None:
 
     selected_strategy = st.radio(
         "Choose the approach that best describes you:",
-        strategy_options,
-        key="pricing_strategy_main"
+        strategy_options
     )
 
-    notes = st.text_area(
-        "Anything else you consider when setting prices?",
+    pricing_notes = st.text_area(
+        "Anything else do you consider?",
+        value=st.session_state.pricing_notes,
         placeholder=(
-            "For example: fast-moving products, "
-            "regular customers, supplier price changes, "
-            "competition, transport costs..."
+            "For example: customer relationships, "
+            "fast-moving products, competition, "
+            "supplier prices or transport costs."
         )
     )
 
@@ -713,28 +701,30 @@ if st.session_state.pricing_data is not None:
         type="primary"
     ):
 
-        st.session_state.pricing_strategy[
-            "general"
-        ] = selected_strategy
+        st.session_state.pricing_strategy = (
+            selected_strategy
+        )
 
-        st.session_state.pricing_strategy[
-            "notes"
-        ] = notes
+        st.session_state.pricing_notes = (
+            pricing_notes
+        )
 
         st.success(
-            "Your pricing approach has been saved."
+            "Pricing approach saved."
         )
 
 
 # ============================================================
-# 5. FINAL PRICING VIEW
+# 5. SIMPLE PRICING SUMMARY
 # ============================================================
 
 if st.session_state.pricing_data is not None:
 
     st.divider()
 
-    st.header("5. Pricing Summary")
+    st.header(
+        "5. Pricing Summary"
+    )
 
     summary = (
         st.session_state.pricing_data
@@ -754,15 +744,58 @@ if st.session_state.pricing_data is not None:
         summary_columns
     ].copy()
 
+    # --------------------------------------------------------
+    # FORMAT DISPLAY
+    # --------------------------------------------------------
+
+    summary_display["Buying Price"] = (
+        summary_display["Buying Price"]
+        .apply(
+            lambda x: (
+                f"KES {x:,.2f}"
+                if pd.notna(x)
+                else "—"
+            )
+        )
+    )
+
+    summary_display["Current Selling Price"] = (
+        summary_display["Current Selling Price"]
+        .apply(
+            lambda x: (
+                f"KES {x:,.2f}"
+                if pd.notna(x) and x > 0
+                else "—"
+            )
+        )
+    )
+
+    summary_display["Markup"] = (
+        summary_display["Markup"]
+        .apply(
+            lambda x: (
+                f"{x:.2f}%"
+                if pd.notna(x)
+                else "—"
+            )
+        )
+    )
+
+    summary_display["Margin"] = (
+        summary_display["Margin"]
+        .apply(
+            lambda x: (
+                f"{x:.2f}%"
+                if pd.notna(x)
+                else "—"
+            )
+        )
+    )
+
     st.dataframe(
         summary_display,
         use_container_width=True,
         hide_index=True
-    )
-
-    st.caption(
-        "The current version does not recommend a selling price yet. "
-        "It first learns how the wholesaler actually prices products."
     )
 
 
@@ -773,7 +806,6 @@ if st.session_state.pricing_data is not None:
 st.divider()
 
 st.caption(
-    "The wholesaler remains in control. "
-    "The system calculates, organizes and explains — "
-    "the owner makes the final pricing decision."
+    "The system supports the wholesaler's decision. "
+    "It does not replace the owner's judgement."
 )
