@@ -572,7 +572,7 @@ if st.session_state.source_data is not None:
 
     check = edited[
         [
-            "Product", "BP/C", "MIN S.P", "MARKET RANGE",
+            "Item", "BP/C", "MIN S.P", "MARKET RANGE",
             "RECC S.P", "RECC MARGIN %",
             "STS. S.P", "CURRENT MARGIN %",
             "NEW S.P", "BASE PRICE"
