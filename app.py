@@ -580,11 +580,11 @@ if st.session_state.source_data is not None:
             ),
             "MARGIN %": st.column_config.NumberColumn(
                 "MARGIN %", min_value=-1.0, max_value=10.0,
-                step=0.001, format="0.00%"
+                step=0.001, format="%.2f%%"
             ),
             "MIN M%": st.column_config.NumberColumn(
                 "MIN M%", min_value=0.0, max_value=10.0,
-                step=0.001, format="0.00%",
+                step=0.001, format="%.2f%%",
                 help="Editable owner minimum margin. Enter 6.5% as 6.5% in the cell."
             ),
             "MIN S.P": st.column_config.NumberColumn(
@@ -595,14 +595,14 @@ if st.session_state.source_data is not None:
                 format="KES %.2f"
             ),
             "RECC MARGIN %": st.column_config.NumberColumn(
-                "RECC MARGIN %", format="0.00%"
+                "RECC MARGIN %", format="%.2f%%"
             ),
             "STS. S.P": st.column_config.NumberColumn(
                 "STS. S.P", min_value=0.0, step=1.0,
                 format="KES %.2f"
             ),
             "CURRENT MARGIN %": st.column_config.NumberColumn(
-                "CURRENT MARGIN %", format="0.00%"
+                "CURRENT MARGIN %", format="%.2f%%"
             ),
             "NEW S.P": st.column_config.NumberColumn(
                 "NEW S.P", min_value=0.0, step=1.0,
@@ -699,9 +699,9 @@ if st.session_state.source_data is not None:
             "BP/C": st.column_config.NumberColumn(format="KES %.2f"),
             "MIN S.P": st.column_config.NumberColumn(format="KES %.2f"),
             "RECC S.P": st.column_config.NumberColumn(format="KES %.2f"),
-            "RECC MARGIN %": st.column_config.NumberColumn(format="0.00%"),
+            "RECC MARGIN %": st.column_config.NumberColumn(format="%.2f%%"),
             "STS. S.P": st.column_config.NumberColumn(format="KES %.2f"),
-            "CURRENT MARGIN %": st.column_config.NumberColumn(format="0.00%"),
+            "CURRENT MARGIN %": st.column_config.NumberColumn(format="%.2f%%"),
             "NEW S.P": st.column_config.NumberColumn(format="KES %.2f"),
             "BASE PRICE": st.column_config.NumberColumn(format="KES %.2f"),
         }
