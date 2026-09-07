@@ -59,17 +59,14 @@ def formula_base_price(new_sp, pc):
     return new_sp / pc
 
 
-
 def normalize_text(value):
-    """Normalize product/category text for reliable rule matching."""
     if pd.isna(value):
         return ""
     return " ".join(str(value).upper().strip().split())
 
-# ============================================================
-# V1 OWNER MINIMUM MARGIN RULES
-# These are owner-defined business rules, not AI-generated prices.
-# ============================================================
+
+# Owner-defined minimum markup/margin rules.
+# These are transparent V1 business rules, not AI-generated prices.
 OWNER_MIN_MARGIN_RULES = {
     "FATS": 0.05,
     "LAUNDRY SOAP": 0.07,
@@ -92,7 +89,6 @@ OWNER_MIN_MARGIN_RULES = {
     "SAUCES": 0.08,
     "BATTERY:GOLDEN": 0.05,
     "BATTERY:EVEREADY": 0.11,
-    # Additional owner rules requested for V1
     "NOODLES:INDOMIE": 0.065,
     "NOODLES:SOSSI": 0.051,
     "NOODLES:SPAGHETTI": 0.10,
@@ -102,15 +98,12 @@ OWNER_MIN_MARGIN_RULES = {
     "CEREALS": 0.065,
 }
 
-def owner_min_margin_for_item(item, fallback=np.nan):
+def owner_min_margin_for_item(item, fallback=0.05):
     text = normalize_text(item)
-    if "BATTERY" in text and "GOLDEN" in text:
-        return OWNER_MIN_MARGIN_RULES["BATTERY:GOLDEN"]
-    if "BATTERY" in text and "EVEREADY" in text:
-        return OWNER_MIN_MARGIN_RULES["BATTERY:EVEREADY"]
 
-    # Brand/product-specific rules must be checked before broad category rules.
     brand_matches = [
+        ("BATTERY:EVEREADY", ["EVEREADY"]),
+        ("BATTERY:GOLDEN", ["GOLDEN"]),
         ("NOODLES:INDOMIE", ["INDOMIE"]),
         ("NOODLES:SOSSI", ["SOSSI"]),
         ("NOODLES:SPAGHETTI", ["SPAGHETTI"]),
@@ -127,7 +120,6 @@ def owner_min_margin_for_item(item, fallback=np.nan):
         ("MAIZE FLOUR", ["MAIZE FLOUR"]),
         ("LAUNDRY SOAP", ["LAUNDRY", "DETERGENT"]),
         ("BATHING SOAP", ["BATHING SOAP"]),
-        ("NOODLES:SPAGHETTI", ["NOODLES", "SPAGHETTI"]),
         ("CEREALS", ["CEREAL"]),
         ("TEA & COFFEE", ["TEA & COFFEE", "TEA", "COFFEE"]),
         ("CONFECTIONERIES", ["CONFECTION", "BISCUIT", "SWEET"]),
@@ -151,10 +143,14 @@ def owner_min_margin_for_item(item, fallback=np.nan):
     return fallback
 
 def formula_recommended_price(min_sp, system_sp):
-    if pd.isna(min_sp) and pd.isna(system_sp): return np.nan
-    if pd.isna(system_sp): return min_sp
-    if pd.isna(min_sp): return system_sp
+    if pd.isna(min_sp) and pd.isna(system_sp):
+        return np.nan
+    if pd.isna(system_sp):
+        return min_sp
+    if pd.isna(min_sp):
+        return system_sp
     return max(float(min_sp), float(system_sp))
+
 
 # ============================================================
 # COLUMN NORMALISATION
@@ -341,7 +337,7 @@ def build_pricing_table(data):
     ]
 
     pricing["MARKET RANGE"] = ""
-    pricing["RECC S.P"] = [formula_recommended_price(min_sp, np.nan) for min_sp in pricing["MIN S.P"]]
+    pricing["RECC S.P"] = pricing["MIN S.P"].copy()
     pricing["RECC MARGIN %"] = [
         formula_recc_margin(sp, bp)
         for sp, bp in zip(pricing["RECC S.P"], pricing["BP/C"])
@@ -411,7 +407,7 @@ def export_excel(pricing):
 
         # Formatting.
         money_cols = ["J", "K", "L", "M", "P", "R", "S", "T", "U", "V", "W", "X", "Y"]
-        percent_cols = ["N", "O", "S", "U"]
+        percent_cols = ["O", "S", "U"]
 
         for col in money_cols:
             for cell in ws[col][1:]:
@@ -519,7 +515,7 @@ if st.session_state.source_data is not None:
 
         st.dataframe(
             display_source,
-            width='stretch',
+            width="stretch",
             hide_index=True,
             column_config={
                 "Cost Price": st.column_config.NumberColumn(
@@ -540,14 +536,15 @@ if st.session_state.source_data is not None:
 
     st.info(
         "The formulas are fixed from Dabu / PRICING.xlsx. "
-        "Product details, minimum margins, market range and selling prices "
-        "can change. Percentages are displayed as percentages, not decimals."
+        "Product details, margins, market range and selling prices "
+        "can change."
     )
 
     editable_columns = [
         "MARGIN %",
         "MIN M%",
         "MARKET RANGE",
+        "RECC S.P",
         "STS. S.P",
         "NEW S.P",
         "WS S.P",
@@ -559,120 +556,112 @@ if st.session_state.source_data is not None:
         if col not in editable_columns
     ]
 
+    # Streamlit percentage formatting has caused version-dependent display errors.
+    # For the worksheet we therefore show percentages as percentage-points:
+    # 2 means 2%, 5.1 means 5.1%, 10 means 10%.
+    editor_data = pricing_data[EXPORT_COLUMNS].copy()
+    percentage_columns = ["MARGIN %", "MIN M%"]
+    for col in percentage_columns:
+        editor_data[col] = pd.to_numeric(editor_data[col], errors="coerce") * 100
+
+    # Output margins are display-only in this editor. Keep them as text so
+    # Streamlit cannot reinterpret 0.02 as 0.02%.
+    for col in ["RECC MARGIN %", "CURRENT MARGIN %"]:
+        editor_data[col] = editor_data[col].apply(
+            lambda x: "" if pd.isna(x) else f"{float(x) * 100:g}%"
+        )
+
+    old_recc = pricing_data["RECC S.P"].copy()
+
     edited = st.data_editor(
-        pricing_data[EXPORT_COLUMNS],
-        width='stretch',
+        editor_data,
+        width="stretch",
         hide_index=True,
         num_rows="fixed",
         disabled=disabled_columns,
         column_config={
-            "Cost Price": st.column_config.NumberColumn(
-                "Cost Price", format="KES %.2f"
-            ),
-            "Amount": st.column_config.NumberColumn(
-                "Amount", format="KES %.2f"
-            ),
-            "AMT (VAT)": st.column_config.NumberColumn(
-                "AMT (VAT)", format="KES %.2f"
-            ),
-            "BP/C": st.column_config.NumberColumn(
-                "BP/C", format="KES %.2f"
-            ),
+            "Cost Price": st.column_config.NumberColumn("Cost Price", format="KES %.2f"),
+            "Amount": st.column_config.NumberColumn("Amount", format="KES %.2f"),
+            "AMT (VAT)": st.column_config.NumberColumn("AMT (VAT)", format="KES %.2f"),
+            "BP/C": st.column_config.NumberColumn("BP/C", format="KES %.2f"),
             "MARGIN %": st.column_config.NumberColumn(
-                "MARGIN %", min_value=-1.0, max_value=10.0,
-                step=0.001, format="%.2f%%"
+                "MARGIN % (%)", min_value=-100.0, max_value=1000.0,
+                step=0.1, format="%.1f"
             ),
             "MIN M%": st.column_config.NumberColumn(
-                "MIN M%", min_value=0.0, max_value=10.0,
-                step=0.001, format="%.2f%%",
-                help="Editable owner minimum margin. Enter 6.5% as 6.5% in the cell."
+                "MIN M% (%)", min_value=0.0, max_value=1000.0,
+                step=0.1, format="%.1f",
+                help="Enter the margin as a normal percentage: 2 = 2%, 6.5 = 6.5%, 10 = 10%."
             ),
-            "MIN S.P": st.column_config.NumberColumn(
-                "MIN S.P", format="KES %.2f"
-            ),
+            "MIN S.P": st.column_config.NumberColumn("MIN S.P", format="KES %.2f"),
             "RECC S.P": st.column_config.NumberColumn(
-                "RECC S.P", min_value=0.0, step=1.0,
-                format="KES %.2f"
+                "RECC S.P (editable)", min_value=0.0, step=1.0, format="KES %.2f",
+                help="System fills this recommendation automatically. You can edit it."
             ),
-            "RECC MARGIN %": st.column_config.NumberColumn(
-                "RECC MARGIN %", format="%.2f%%"
-            ),
-            "STS. S.P": st.column_config.NumberColumn(
-                "STS. S.P", min_value=0.0, step=1.0,
-                format="KES %.2f"
-            ),
-            "CURRENT MARGIN %": st.column_config.NumberColumn(
-                "CURRENT MARGIN %", format="%.2f%%"
-            ),
-            "NEW S.P": st.column_config.NumberColumn(
-                "NEW S.P", min_value=0.0, step=1.0,
-                format="KES %.2f"
-            ),
-            "BASE PRICE": st.column_config.NumberColumn(
-                "BASE PRICE", format="KES %.2f"
-            ),
-            "WS S.P": st.column_config.NumberColumn(
-                "WS S.P", min_value=0.0, step=1.0,
-                format="KES %.2f"
-            ),
-            "RETAIL S.P": st.column_config.NumberColumn(
-                "RETAIL S.P", min_value=0.0, step=1.0,
-                format="KES %.2f"
-            ),
+            "STS. S.P": st.column_config.NumberColumn("STS. S.P", min_value=0.0, step=1.0, format="KES %.2f"),
+            "NEW S.P": st.column_config.NumberColumn("NEW S.P", min_value=0.0, step=1.0, format="KES %.2f"),
+            "BASE PRICE": st.column_config.NumberColumn("BASE PRICE", format="KES %.2f"),
+            "WS S.P": st.column_config.NumberColumn("WS S.P", min_value=0.0, step=1.0, format="KES %.2f"),
+            "RETAIL S.P": st.column_config.NumberColumn("RETAIL S.P", min_value=0.0, step=1.0, format="KES %.2f"),
         }
-    )
+    ).copy()
 
-    # --------------------------------------------------------
-    # Recalculate fixed formulas after user edits
-    # --------------------------------------------------------
-    edited = edited.copy()
+    # Convert the user-facing percentage points back to Dabu proportions.
+    for col in ["MARGIN %", "MIN M%"]:
+        edited[col] = pd.to_numeric(edited[col], errors="coerce") / 100
 
-    for col in ["Qty", "P/C", "Cost Price", "MIN M%",
-                "MARGIN %", "RECC S.P", "STS. S.P", "NEW S.P",
-                "WS S.P", "RETAIL S.P"]:
-        edited[col] = pd.to_numeric(edited[col], errors="coerce")
-
-    # All percentage values are stored internally as proportions: 0.065 = 6.50%.
-    # Streamlit then displays them as percentages rather than raw decimals.
-    for col in ["MARGIN %", "MIN M%", "RECC MARGIN %", "CURRENT MARGIN %"]:
+    for col in ["Qty", "P/C", "Cost Price", "RECC S.P", "STS. S.P",
+                "NEW S.P", "WS S.P", "RETAIL S.P"]:
         edited[col] = pd.to_numeric(edited[col], errors="coerce")
 
     edited["Amount"] = [
         formula_amount(q, c)
         for q, c in zip(edited["Qty"], edited["Cost Price"])
     ]
-
     edited["AMT (VAT)"] = edited["Amount"].apply(formula_vat)
-
     edited["BP/C"] = [
         formula_bpc(vat, qty)
         for vat, qty in zip(edited["AMT (VAT)"], edited["Qty"])
     ]
-
     edited["MIN S.P"] = [
         formula_min_sp(bp, margin)
         for bp, margin in zip(edited["BP/C"], edited["MIN M%"])
     ]
 
-    # V1 recommendation: higher of MIN S.P and STS. S.P.
-    edited["RECC S.P"] = [
-        formula_recommended_price(min_sp, system_sp)
-        for min_sp, system_sp in zip(edited["MIN S.P"], edited["STS. S.P"])
-    ]
+    # AUTO-RECOMMENDATION + HUMAN OVERRIDE:
+    # If the owner has not changed RECC S.P manually, update it when MIN M%
+    # or STS. S.P changes. Once the owner edits RECC S.P, their value is kept.
+    for i in edited.index:
+        current_recc = edited.at[i, "RECC S.P"]
+        previous_recc = old_recc.iloc[i] if i < len(old_recc) else np.nan
+        auto_recc = formula_recommended_price(
+            edited.at[i, "MIN S.P"], edited.at[i, "STS. S.P"]
+        )
+        if pd.isna(current_recc) or (
+            (pd.isna(previous_recc) and pd.isna(current_recc))
+            or (not pd.isna(previous_recc) and not pd.isna(current_recc)
+                and abs(float(current_recc) - float(previous_recc)) < 1e-9)
+        ):
+            edited.at[i, "RECC S.P"] = auto_recc
 
     edited["RECC MARGIN %"] = [
         formula_recc_margin(sp, bp)
         for sp, bp in zip(edited["RECC S.P"], edited["BP/C"])
     ]
-
     edited["CURRENT MARGIN %"] = [
         formula_current_margin(sp, bp)
         for sp, bp in zip(edited["STS. S.P"], edited["BP/C"])
     ]
-
     edited["BASE PRICE"] = [
         formula_base_price(sp, pc)
         for sp, pc in zip(edited["NEW S.P"], edited["P/C"])
+    ]
+
+    # NEW MARGIN % is useful to the owner but is not added to the original
+    # Dabu export columns. It is calculated in the Pricing Check below.
+    edited["NEW MARGIN %"] = [
+        formula_current_margin(sp, bp)
+        for sp, bp in zip(edited["NEW S.P"], edited["BP/C"])
     ]
 
     st.session_state.pricing_data = edited
@@ -684,24 +673,27 @@ if st.session_state.source_data is not None:
 
     check = edited[
         [
-            "Item", "BP/C", "MIN S.P", "MARKET RANGE",
+            "Product", "BP/C", "MIN S.P", "MARKET RANGE",
             "RECC S.P", "RECC MARGIN %",
             "STS. S.P", "CURRENT MARGIN %",
-            "NEW S.P", "BASE PRICE"
+            "NEW S.P", "NEW MARGIN %", "BASE PRICE"
         ]
     ].copy()
 
+    for col in ["RECC MARGIN %", "CURRENT MARGIN %", "NEW MARGIN %"]:
+        check[col] = check[col].apply(
+            lambda x: "" if pd.isna(x) else f"{float(x) * 100:g}%"
+        )
+
     st.dataframe(
         check,
-        width='stretch',
+        width="stretch",
         hide_index=True,
         column_config={
             "BP/C": st.column_config.NumberColumn(format="KES %.2f"),
             "MIN S.P": st.column_config.NumberColumn(format="KES %.2f"),
             "RECC S.P": st.column_config.NumberColumn(format="KES %.2f"),
-            "RECC MARGIN %": st.column_config.NumberColumn(format="%.2f%%"),
             "STS. S.P": st.column_config.NumberColumn(format="KES %.2f"),
-            "CURRENT MARGIN %": st.column_config.NumberColumn(format="%.2f%%"),
             "NEW S.P": st.column_config.NumberColumn(format="KES %.2f"),
             "BASE PRICE": st.column_config.NumberColumn(format="KES %.2f"),
         }
