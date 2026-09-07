@@ -551,11 +551,6 @@ if st.session_state.source_data is not None:
         "RETAIL S.P",
     ]
 
-    disabled_columns = [
-        col for col in pricing_data.columns
-        if col not in editable_columns
-    ]
-
     # Streamlit percentage formatting has caused version-dependent display errors.
     # For the worksheet we therefore show percentages as percentage-points:
     # 2 means 2%, 5.1 means 5.1%, 10 means 10%.
@@ -572,6 +567,11 @@ if st.session_state.source_data is not None:
         )
 
     old_recc = pricing_data["RECC S.P"].copy()
+
+    disabled_columns = [
+        col for col in editor_data.columns
+        if col not in editable_columns
+    ]
 
     edited = st.data_editor(
         editor_data,
@@ -673,7 +673,7 @@ if st.session_state.source_data is not None:
 
     check = edited[
         [
-            "Product", "BP/C", "MIN S.P", "MARKET RANGE",
+            "Item", "BP/C", "MIN S.P", "MARKET RANGE",
             "RECC S.P", "RECC MARGIN %",
             "STS. S.P", "CURRENT MARGIN %",
             "NEW S.P", "NEW MARGIN %", "BASE PRICE"
