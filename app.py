@@ -71,32 +71,79 @@ def normalize_text(value):
 # These are owner-defined business rules, not AI-generated prices.
 # ============================================================
 OWNER_MIN_MARGIN_RULES = {
-    "FATS": 0.05, "LAUNDRY SOAP": 0.07, "WHEAT FLOUR": 0.02,
-    "MAIZE FLOUR": 0.02, "CONFECTIONERIES": 0.07, "SPREADS": 0.08,
-    "TEA & COFFEE": 0.08, "SUGAR": 0.04, "RICE": 0.04, "FABRIC": 0.08,
-    "MEDICINE": 0.07, "BAKING MIXES": 0.05, "SANITARY": 0.05,
-    "SKINCARE": 0.05, "BATHING SOAP": 0.06, "DIAPERS": 0.05,
-    "HOME UTILITIES": 0.10, "ORAL": 0.065, "SAUCES": 0.08,
-    "BATTERY:GOLDEN": 0.05, "BATTERY:EVEREDY": 0.11,
+    "FATS": 0.05,
+    "LAUNDRY SOAP": 0.07,
+    "WHEAT FLOUR": 0.02,
+    "MAIZE FLOUR": 0.02,
+    "CONFECTIONERIES": 0.07,
+    "SPREADS": 0.08,
+    "TEA & COFFEE": 0.08,
+    "SUGAR": 0.04,
+    "RICE": 0.04,
+    "FABRIC": 0.08,
+    "MEDICINE": 0.07,
+    "BAKING MIXES": 0.05,
+    "SANITARY": 0.05,
+    "SKINCARE": 0.05,
+    "BATHING SOAP": 0.06,
+    "DIAPERS": 0.05,
+    "HOME UTILITIES": 0.10,
+    "ORAL": 0.065,
+    "SAUCES": 0.08,
+    "BATTERY:GOLDEN": 0.05,
+    "BATTERY:EVEREADY": 0.11,
+    # Additional owner rules requested for V1
+    "NOODLES:INDOMIE": 0.065,
+    "NOODLES:SOSSI": 0.051,
+    "NOODLES:SPAGHETTI": 0.10,
+    "PERSONAL CARE:GILLETTE": 0.003,
+    "PERSONAL CARE:KIWI": 0.10,
+    "PERSONAL CARE:ROBERTS": 0.05,
+    "CEREALS": 0.065,
 }
 
 def owner_min_margin_for_item(item, fallback=np.nan):
     text = normalize_text(item)
     if "BATTERY" in text and "GOLDEN" in text:
         return OWNER_MIN_MARGIN_RULES["BATTERY:GOLDEN"]
-    if "BATTERY" in text and "EVEREDY" in text:
-        return OWNER_MIN_MARGIN_RULES["BATTERY:EVEREDY"]
+    if "BATTERY" in text and "EVEREADY" in text:
+        return OWNER_MIN_MARGIN_RULES["BATTERY:EVEREADY"]
+
+    # Brand/product-specific rules must be checked before broad category rules.
+    brand_matches = [
+        ("NOODLES:INDOMIE", ["INDOMIE"]),
+        ("NOODLES:SOSSI", ["SOSSI"]),
+        ("NOODLES:SPAGHETTI", ["SPAGHETTI"]),
+        ("PERSONAL CARE:GILLETTE", ["GILLETTE"]),
+        ("PERSONAL CARE:KIWI", ["KIWI"]),
+        ("PERSONAL CARE:ROBERTS", ["ROBERTS"]),
+    ]
+    for key, keywords in brand_matches:
+        if any(k in text for k in keywords):
+            return OWNER_MIN_MARGIN_RULES[key]
+
     matches = [
-        ("WHEAT FLOUR", ["WHEAT FLOUR"]), ("MAIZE FLOUR", ["MAIZE FLOUR"]),
-        ("LAUNDRY SOAP", ["LAUNDRY", "DETERGENT"]), ("BATHING SOAP", ["BATHING SOAP"]),
+        ("WHEAT FLOUR", ["WHEAT FLOUR"]),
+        ("MAIZE FLOUR", ["MAIZE FLOUR"]),
+        ("LAUNDRY SOAP", ["LAUNDRY", "DETERGENT"]),
+        ("BATHING SOAP", ["BATHING SOAP"]),
+        ("NOODLES:SPAGHETTI", ["NOODLES", "SPAGHETTI"]),
+        ("CEREALS", ["CEREAL"]),
         ("TEA & COFFEE", ["TEA & COFFEE", "TEA", "COFFEE"]),
         ("CONFECTIONERIES", ["CONFECTION", "BISCUIT", "SWEET"]),
-        ("SPREADS", ["SPREAD"]), ("FATS", ["FAT", "COOKING OIL"]),
-        ("SUGAR", ["SUGAR"]), ("RICE", ["RICE"]), ("FABRIC", ["FABRIC"]),
-        ("MEDICINE", ["MEDICINE", "PHARM"]), ("BAKING MIXES", ["BAKING"]),
-        ("SANITARY", ["SANITARY"]), ("SKINCARE", ["SKINCARE", "SKIN CARE"]),
-        ("DIAPERS", ["DIAPER"]), ("HOME UTILITIES", ["HOME UTIL", "KITCHEN CARE"]),
-        ("ORAL", ["ORAL", "TOOTHPASTE", "TOOTHBRUSH"]), ("SAUCES", ["SAUCE"]),
+        ("SPREADS", ["SPREAD"]),
+        ("FATS", ["FAT", "COOKING OIL"]),
+        ("SUGAR", ["SUGAR"]),
+        ("RICE", ["RICE"]),
+        ("FABRIC", ["FABRIC"]),
+        ("MEDICINE", ["MEDICINE", "PHARM"]),
+        ("BAKING MIXES", ["BAKING"]),
+        ("SANITARY", ["SANITARY"]),
+        ("SKINCARE", ["SKINCARE", "SKIN CARE"]),
+        ("DIAPERS", ["DIAPER"]),
+        ("HOME UTILITIES", ["HOME UTIL", "KITCHEN CARE"]),
+        ("ORAL", ["ORAL", "TOOTHPASTE", "TOOTHBRUSH"]),
+        ("SAUCES", ["SAUCE"]),
     ]
     for key, keywords in matches:
         if any(k in text for k in keywords):
@@ -364,7 +411,7 @@ def export_excel(pricing):
 
         # Formatting.
         money_cols = ["J", "K", "L", "M", "P", "R", "S", "T", "U", "V", "W", "X", "Y"]
-        percent_cols = ["O", "S", "U"]
+        percent_cols = ["N", "O", "S", "U"]
 
         for col in money_cols:
             for cell in ws[col][1:]:
@@ -493,8 +540,8 @@ if st.session_state.source_data is not None:
 
     st.info(
         "The formulas are fixed from Dabu / PRICING.xlsx. "
-        "Product details, margins, market range and selling prices "
-        "can change."
+        "Product details, minimum margins, market range and selling prices "
+        "can change. Percentages are displayed as percentages, not decimals."
     )
 
     editable_columns = [
@@ -531,9 +578,14 @@ if st.session_state.source_data is not None:
             "BP/C": st.column_config.NumberColumn(
                 "BP/C", format="KES %.2f"
             ),
+            "MARGIN %": st.column_config.NumberColumn(
+                "MARGIN %", min_value=-1.0, max_value=10.0,
+                step=0.001, format="0.00%"
+            ),
             "MIN M%": st.column_config.NumberColumn(
-                "MIN M%", min_value=0.0, max_value=1.0,
-                step=0.01, format="0.00%"
+                "MIN M%", min_value=0.0, max_value=10.0,
+                step=0.001, format="0.00%",
+                help="Editable owner minimum margin. Enter 6.5% as 6.5% in the cell."
             ),
             "MIN S.P": st.column_config.NumberColumn(
                 "MIN S.P", format="KES %.2f"
@@ -576,8 +628,13 @@ if st.session_state.source_data is not None:
     edited = edited.copy()
 
     for col in ["Qty", "P/C", "Cost Price", "MIN M%",
-                "RECC S.P", "STS. S.P", "NEW S.P",
+                "MARGIN %", "RECC S.P", "STS. S.P", "NEW S.P",
                 "WS S.P", "RETAIL S.P"]:
+        edited[col] = pd.to_numeric(edited[col], errors="coerce")
+
+    # All percentage values are stored internally as proportions: 0.065 = 6.50%.
+    # Streamlit then displays them as percentages rather than raw decimals.
+    for col in ["MARGIN %", "MIN M%", "RECC MARGIN %", "CURRENT MARGIN %"]:
         edited[col] = pd.to_numeric(edited[col], errors="coerce")
 
     edited["Amount"] = [
