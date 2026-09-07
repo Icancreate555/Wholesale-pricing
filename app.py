@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -60,6 +59,12 @@ def formula_base_price(new_sp, pc):
     return new_sp / pc
 
 
+
+def normalize_text(value):
+    """Normalize product/category text for reliable rule matching."""
+    if pd.isna(value):
+        return ""
+    return " ".join(str(value).upper().strip().split())
 
 # ============================================================
 # V1 OWNER MINIMUM MARGIN RULES
