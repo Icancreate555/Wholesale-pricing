@@ -580,9 +580,17 @@ if st.session_state.source_data is not None:
         num_rows="fixed",
         disabled=disabled_columns,
         column_config={
-            "Cost Price": st.column_config.NumberColumn("Cost Price", format="KES %.2f"),
-            "Amount": st.column_config.NumberColumn("Amount", format="KES %.2f"),
-            "AMT (VAT)": st.column_config.NumberColumn("AMT (VAT)", format="KES %.2f"),
+            # Keep accounting/import fields available in the workbook but hidden
+            # from the main pricing workspace.
+            "Type": None,
+            "Date": None,
+            "Num": None,
+            "Memo": None,
+            "P/C": None,
+            "Name": None,
+            "Amount": None,
+            "AMT (VAT)": None,
+            "Cost Price": None,
             "BP/C": st.column_config.NumberColumn("BP/C", format="KES %.2f"),
             "MARGIN %": st.column_config.NumberColumn(
                 "MARGIN % (%)", min_value=-100.0, max_value=1000.0,
