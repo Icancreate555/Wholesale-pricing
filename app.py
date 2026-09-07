@@ -1,3 +1,4 @@
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -58,6 +59,50 @@ def formula_base_price(new_sp, pc):
         return np.nan
     return new_sp / pc
 
+
+
+# ============================================================
+# V1 OWNER MINIMUM MARGIN RULES
+# These are owner-defined business rules, not AI-generated prices.
+# ============================================================
+OWNER_MIN_MARGIN_RULES = {
+    "FATS": 0.05, "LAUNDRY SOAP": 0.07, "WHEAT FLOUR": 0.02,
+    "MAIZE FLOUR": 0.02, "CONFECTIONERIES": 0.07, "SPREADS": 0.08,
+    "TEA & COFFEE": 0.08, "SUGAR": 0.04, "RICE": 0.04, "FABRIC": 0.08,
+    "MEDICINE": 0.07, "BAKING MIXES": 0.05, "SANITARY": 0.05,
+    "SKINCARE": 0.05, "BATHING SOAP": 0.06, "DIAPERS": 0.05,
+    "HOME UTILITIES": 0.10, "ORAL": 0.065, "SAUCES": 0.08,
+    "BATTERY:GOLDEN": 0.05, "BATTERY:EVEREDY": 0.11,
+}
+
+def owner_min_margin_for_item(item, fallback=np.nan):
+    text = normalize_text(item)
+    if "BATTERY" in text and "GOLDEN" in text:
+        return OWNER_MIN_MARGIN_RULES["BATTERY:GOLDEN"]
+    if "BATTERY" in text and "EVEREDY" in text:
+        return OWNER_MIN_MARGIN_RULES["BATTERY:EVEREDY"]
+    matches = [
+        ("WHEAT FLOUR", ["WHEAT FLOUR"]), ("MAIZE FLOUR", ["MAIZE FLOUR"]),
+        ("LAUNDRY SOAP", ["LAUNDRY", "DETERGENT"]), ("BATHING SOAP", ["BATHING SOAP"]),
+        ("TEA & COFFEE", ["TEA & COFFEE", "TEA", "COFFEE"]),
+        ("CONFECTIONERIES", ["CONFECTION", "BISCUIT", "SWEET"]),
+        ("SPREADS", ["SPREAD"]), ("FATS", ["FAT", "COOKING OIL"]),
+        ("SUGAR", ["SUGAR"]), ("RICE", ["RICE"]), ("FABRIC", ["FABRIC"]),
+        ("MEDICINE", ["MEDICINE", "PHARM"]), ("BAKING MIXES", ["BAKING"]),
+        ("SANITARY", ["SANITARY"]), ("SKINCARE", ["SKINCARE", "SKIN CARE"]),
+        ("DIAPERS", ["DIAPER"]), ("HOME UTILITIES", ["HOME UTIL", "KITCHEN CARE"]),
+        ("ORAL", ["ORAL", "TOOTHPASTE", "TOOTHBRUSH"]), ("SAUCES", ["SAUCE"]),
+    ]
+    for key, keywords in matches:
+        if any(k in text for k in keywords):
+            return OWNER_MIN_MARGIN_RULES[key]
+    return fallback
+
+def formula_recommended_price(min_sp, system_sp):
+    if pd.isna(min_sp) and pd.isna(system_sp): return np.nan
+    if pd.isna(system_sp): return min_sp
+    if pd.isna(min_sp): return system_sp
+    return max(float(min_sp), float(system_sp))
 
 # ============================================================
 # COLUMN NORMALISATION
@@ -237,14 +282,14 @@ def build_pricing_table(data):
     # These values are deliberately editable because they are not
     # constant formulas in Dabu.
     pricing["MARGIN %"] = ""
-    pricing["MIN M%"] = np.nan
+    pricing["MIN M%"] = [owner_min_margin_for_item(item) for item in pricing["Item"]]
     pricing["MIN S.P"] = [
         formula_min_sp(bp, margin)
         for bp, margin in zip(pricing["BP/C"], pricing["MIN M%"])
     ]
 
     pricing["MARKET RANGE"] = ""
-    pricing["RECC S.P"] = np.nan
+    pricing["RECC S.P"] = [formula_recommended_price(min_sp, np.nan) for min_sp in pricing["MIN S.P"]]
     pricing["RECC MARGIN %"] = [
         formula_recc_margin(sp, bp)
         for sp, bp in zip(pricing["RECC S.P"], pricing["BP/C"])
@@ -422,7 +467,7 @@ if st.session_state.source_data is not None:
 
         st.dataframe(
             display_source,
-            use_container_width=True,
+            width='stretch',
             hide_index=True,
             column_config={
                 "Cost Price": st.column_config.NumberColumn(
@@ -451,7 +496,6 @@ if st.session_state.source_data is not None:
         "MARGIN %",
         "MIN M%",
         "MARKET RANGE",
-        "RECC S.P",
         "STS. S.P",
         "NEW S.P",
         "WS S.P",
@@ -465,7 +509,7 @@ if st.session_state.source_data is not None:
 
     edited = st.data_editor(
         pricing_data[EXPORT_COLUMNS],
-        use_container_width=True,
+        width='stretch',
         hide_index=True,
         num_rows="fixed",
         disabled=disabled_columns,
@@ -548,6 +592,12 @@ if st.session_state.source_data is not None:
         for bp, margin in zip(edited["BP/C"], edited["MIN M%"])
     ]
 
+    # V1 recommendation: higher of MIN S.P and STS. S.P.
+    edited["RECC S.P"] = [
+        formula_recommended_price(min_sp, system_sp)
+        for min_sp, system_sp in zip(edited["MIN S.P"], edited["STS. S.P"])
+    ]
+
     edited["RECC MARGIN %"] = [
         formula_recc_margin(sp, bp)
         for sp, bp in zip(edited["RECC S.P"], edited["BP/C"])
@@ -581,7 +631,7 @@ if st.session_state.source_data is not None:
 
     st.dataframe(
         check,
-        use_container_width=True,
+        width='stretch',
         hide_index=True,
         column_config={
             "BP/C": st.column_config.NumberColumn(format="KES %.2f"),
