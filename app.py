@@ -469,6 +469,11 @@ if uploaded_file is not None:
 
             st.session_state.source_data = source_data
             st.session_state.pricing_data = pricing_data
+
+            # Start a fresh editor only for a new uploaded invoice.
+            st.session_state.pop("pricing_editor", None)
+            st.session_state.pop("pricing_editor_widget", None)
+
             st.session_state.invoice_name = uploaded_file.name
 
         except Exception as exc:
@@ -551,35 +556,115 @@ if st.session_state.source_data is not None:
         "RETAIL S.P",
     ]
 
-    # Streamlit percentage formatting has caused version-dependent display errors.
-    # For the worksheet we therefore show percentages as percentage-points:
-    # 2 means 2%, 5.1 means 5.1%, 10 means 10%.
-    editor_data = pricing_data[EXPORT_COLUMNS].copy()
-    percentage_columns = ["MARGIN %", "MIN M%"]
-    for col in percentage_columns:
-        editor_data[col] = pd.to_numeric(editor_data[col], errors="coerce") * 100
+    # --------------------------------------------------------
+    # EDITOR STATE
+    # Streamlit reruns the script after every cell edit. A stable
+    # widget key keeps the edited table alive instead of rebuilding
+    # it from scratch after each change.
+    # --------------------------------------------------------
+    if "pricing_editor" not in st.session_state:
+        editor_data = pricing_data[EXPORT_COLUMNS].copy()
 
-    # Output margins are display-only in this editor. Keep them as text so
-    # Streamlit cannot reinterpret 0.02 as 0.02%.
-    for col in ["RECC MARGIN %", "CURRENT MARGIN %"]:
-        editor_data[col] = editor_data[col].apply(
-            lambda x: "" if pd.isna(x) else f"{float(x) * 100:g}%"
-        )
+        for col in ["MARGIN %", "MIN M%"]:
+            editor_data[col] = (
+                pd.to_numeric(editor_data[col], errors="coerce") * 100
+            )
 
-    disabled_columns = [
-        col for col in editor_data.columns
-        if col not in editable_columns
-    ]
+        for col in ["RECC MARGIN %", "CURRENT MARGIN %"]:
+            editor_data[col] = editor_data[col].apply(
+                lambda x: "" if pd.isna(x) else f"{float(x) * 100:g}%"
+            )
 
+        st.session_state.pricing_editor = editor_data
+
+    def recalculate_pricing_editor():
+        """Recalculate dependent Dabu fields without rebuilding the editor."""
+        edited = st.session_state.pricing_editor.copy()
+
+        # User-facing percentage points -> internal proportions.
+        for col in ["MARGIN %", "MIN M%"]:
+            edited[col] = pd.to_numeric(
+                edited[col], errors="coerce"
+            ) / 100
+
+        for col in [
+            "Qty", "P/C", "Cost Price", "RECC S.P", "STS. S.P",
+            "NEW S.P", "WS S.P", "RETAIL S.P"
+        ]:
+            edited[col] = pd.to_numeric(edited[col], errors="coerce")
+
+        # Dabu formulas.
+        edited["Amount"] = [
+            formula_amount(q, c)
+            for q, c in zip(edited["Qty"], edited["Cost Price"])
+        ]
+        edited["AMT (VAT)"] = edited["Amount"].apply(formula_vat)
+        edited["BP/C"] = [
+            formula_bpc(vat, qty)
+            for vat, qty in zip(edited["AMT (VAT)"], edited["Qty"])
+        ]
+        edited["MIN S.P"] = [
+            formula_min_sp(bp, margin)
+            for bp, margin in zip(edited["BP/C"], edited["MIN M%"])
+        ]
+
+        # RECC S.P is only filled when blank. Once present, editing STS. S.P
+        # does not overwrite it. The owner can edit RECC S.P directly.
+        for i in edited.index:
+            if pd.isna(edited.at[i, "RECC S.P"]):
+                edited.at[i, "RECC S.P"] = formula_recommended_price(
+                    edited.at[i, "MIN S.P"], np.nan
+                )
+
+        edited["RECC MARGIN %"] = [
+            formula_recc_margin(sp, bp)
+            for sp, bp in zip(edited["RECC S.P"], edited["BP/C"])
+        ]
+        edited["CURRENT MARGIN %"] = [
+            formula_current_margin(sp, bp)
+            for sp, bp in zip(edited["STS. S.P"], edited["BP/C"])
+        ]
+
+        # IMPORTANT:
+        # BASE PRICE = NEW S.P / P/C.
+        # P/C is the existing E-field: pieces contained in one carton,
+        # bale, pack or bundle.
+        edited["BASE PRICE"] = [
+            formula_base_price(sp, pc)
+            for sp, pc in zip(edited["NEW S.P"], edited["P/C"])
+        ]
+
+        edited["NEW MARGIN %"] = [
+            formula_current_margin(sp, bp)
+            for sp, bp in zip(edited["NEW S.P"], edited["BP/C"])
+        ]
+
+        # Convert internal proportions back to user-facing percentage points.
+        for col in ["MARGIN %", "MIN M%"]:
+            edited[col] = edited[col] * 100
+
+        for col in ["RECC MARGIN %", "CURRENT MARGIN %", "NEW MARGIN %"]:
+            edited[col] = edited[col].apply(
+                lambda x: "" if pd.isna(x) else f"{float(x) * 100:g}%"
+            )
+
+        st.session_state.pricing_data = edited.copy()
+        st.session_state.pricing_editor = edited.copy()
+
+    # Stable key is the important part: edits remain in the table across
+    # Streamlit reruns, so the wholesaler can keep working down a column.
     edited = st.data_editor(
-        editor_data,
+        st.session_state.pricing_editor,
         width="stretch",
         hide_index=True,
         num_rows="fixed",
-        disabled=disabled_columns,
+        disabled=[
+            col for col in st.session_state.pricing_editor.columns
+            if col not in editable_columns
+        ],
+        key="pricing_editor_widget",
+        on_change=recalculate_pricing_editor,
         column_config={
-            # Keep accounting/import fields available in the workbook but hidden
-            # from the main pricing workspace.
             "Type": None,
             "Date": None,
             "Num": None,
@@ -589,82 +674,70 @@ if st.session_state.source_data is not None:
             "Amount": None,
             "AMT (VAT)": None,
             "Cost Price": None,
-            "BP/C": st.column_config.NumberColumn("BP/C", format="KES %.2f"),
+            "BP/C": st.column_config.NumberColumn(
+                "BP/C", format="KES %.2f"
+            ),
             "MARGIN %": st.column_config.NumberColumn(
-                "MARGIN % (%)", min_value=-100.0, max_value=1000.0,
-                step=0.1, format="%.1f"
+                "MARGIN % (%)",
+                min_value=-100.0,
+                max_value=1000.0,
+                step=0.1,
+                format="%.1f",
             ),
             "MIN M%": st.column_config.NumberColumn(
-                "MIN M% (%)", min_value=0.0, max_value=1000.0,
-                step=0.1, format="%.1f",
-                help="Enter the margin as a normal percentage: 2 = 2%, 6.5 = 6.5%, 10 = 10%."
+                "MIN M% (%)",
+                min_value=0.0,
+                max_value=1000.0,
+                step=0.1,
+                format="%.1f",
+                help="Enter 2 for 2%, 6.5 for 6.5%, 10 for 10%.",
             ),
-            "MIN S.P": st.column_config.NumberColumn("MIN S.P", format="KES %.2f"),
+            "MIN S.P": st.column_config.NumberColumn(
+                "MIN S.P", format="KES %.2f"
+            ),
             "RECC S.P": st.column_config.NumberColumn(
-                "RECC S.P (editable)", min_value=0.0, step=1.0, format="KES %.2f",
-                help="System fills this recommendation automatically. You can edit it."
+                "RECC S.P (editable)",
+                min_value=0.0,
+                step=1.0,
+                format="KES %.2f",
+                help="The system fills this once. You can edit it.",
             ),
-            "STS. S.P": st.column_config.NumberColumn("STS. S.P", min_value=0.0, step=1.0, format="KES %.2f"),
-            "NEW S.P": st.column_config.NumberColumn("NEW S.P", min_value=0.0, step=1.0, format="KES %.2f"),
-            "BASE PRICE": st.column_config.NumberColumn("BASE PRICE", format="KES %.2f"),
-            "WS S.P": st.column_config.NumberColumn("WS S.P", min_value=0.0, step=1.0, format="KES %.2f"),
-            "RETAIL S.P": st.column_config.NumberColumn("RETAIL S.P", min_value=0.0, step=1.0, format="KES %.2f"),
-        }
+            "STS. S.P": st.column_config.NumberColumn(
+                "STS. S.P",
+                min_value=0.0,
+                step=1.0,
+                format="KES %.2f",
+            ),
+            "NEW S.P": st.column_config.NumberColumn(
+                "NEW S.P",
+                min_value=0.0,
+                step=1.0,
+                format="KES %.2f",
+            ),
+            "BASE PRICE": st.column_config.NumberColumn(
+                "BASE PRICE",
+                format="KES %.2f",
+            ),
+            "WS S.P": st.column_config.NumberColumn(
+                "WS S.P",
+                min_value=0.0,
+                step=1.0,
+                format="KES %.2f",
+            ),
+            "RETAIL S.P": st.column_config.NumberColumn(
+                "RETAIL S.P",
+                min_value=0.0,
+                step=1.0,
+                format="KES %.2f",
+            ),
+        },
     ).copy()
 
-    # Convert the user-facing percentage points back to Dabu proportions.
-    for col in ["MARGIN %", "MIN M%"]:
-        edited[col] = pd.to_numeric(edited[col], errors="coerce") / 100
-
-    for col in ["Qty", "P/C", "Cost Price", "RECC S.P", "STS. S.P",
-                "NEW S.P", "WS S.P", "RETAIL S.P"]:
-        edited[col] = pd.to_numeric(edited[col], errors="coerce")
-
-    edited["Amount"] = [
-        formula_amount(q, c)
-        for q, c in zip(edited["Qty"], edited["Cost Price"])
-    ]
-    edited["AMT (VAT)"] = edited["Amount"].apply(formula_vat)
-    edited["BP/C"] = [
-        formula_bpc(vat, qty)
-        for vat, qty in zip(edited["AMT (VAT)"], edited["Qty"])
-    ]
-    edited["MIN S.P"] = [
-        formula_min_sp(bp, margin)
-        for bp, margin in zip(edited["BP/C"], edited["MIN M%"])
-    ]
-
-    # V1 RECOMMENDATION:
-    # RECC S.P is established from the owner's minimum-price rule.
-    # Entering STS. S.P must NOT change RECC S.P.
-    # The owner can edit RECC S.P directly in the worksheet.
-    for i in edited.index:
-        if pd.isna(edited.at[i, "RECC S.P"]):
-            edited.at[i, "RECC S.P"] = formula_recommended_price(
-                edited.at[i, "MIN S.P"], np.nan
-            )
-
-    edited["RECC MARGIN %"] = [
-        formula_recc_margin(sp, bp)
-        for sp, bp in zip(edited["RECC S.P"], edited["BP/C"])
-    ]
-    edited["CURRENT MARGIN %"] = [
-        formula_current_margin(sp, bp)
-        for sp, bp in zip(edited["STS. S.P"], edited["BP/C"])
-    ]
-    edited["BASE PRICE"] = [
-        formula_base_price(sp, pc)
-        for sp, pc in zip(edited["NEW S.P"], edited["P/C"])
-    ]
-
-    # NEW MARGIN % is useful to the owner but is not added to the original
-    # Dabu export columns. It is calculated in the Pricing Check below.
-    edited["NEW MARGIN %"] = [
-        formula_current_margin(sp, bp)
-        for sp, bp in zip(edited["NEW S.P"], edited["BP/C"])
-    ]
-
-    st.session_state.pricing_data = edited
+    # Use the persistent editor state, then recalculate the dependent
+    # values after every edit.
+    st.session_state.pricing_editor = edited.copy()
+    recalculate_pricing_editor()
+    edited = st.session_state.pricing_data.copy()
 
     # --------------------------------------------------------
     # Simple decision view
