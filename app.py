@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -7,7 +6,7 @@ from io import BytesIO
 st.set_page_config(page_title="Wholesale Pricing Workspace", layout="wide")
 
 st.title("Wholesale Pricing Workspace")
-st.caption("Upload a QuickBooks purchase export, review the invoice, and prepare the pricing worksheet.")
+st.caption("**Don’t just sell more. Know what you’re making.**  \\nSee the numbers behind every price, protect your minimum margin, and make pricing decisions with confidence.  \\n**Your business. Your decision. Better visibility.**")
 
 # ============================================================
 # CONSTANT PRICING FORMULAS
@@ -54,7 +53,7 @@ def formula_current_margin(current_sp, bp_c):
     return (current_sp - bp_c) / bp_c
 
 def formula_base_price(new_sp, pc):
-    """Pricing.xlsx: =Vrow/Erow"""
+    """Dabu: BASE PRICE = NEW S.P / P/C (column V / column E)."""
     if pd.isna(new_sp) or pd.isna(pc) or pc == 0:
         return np.nan
     return new_sp / pc
@@ -567,8 +566,6 @@ if st.session_state.source_data is not None:
             lambda x: "" if pd.isna(x) else f"{float(x) * 100:g}%"
         )
 
-    old_recc = pricing_data["RECC S.P"].copy()
-
     disabled_columns = [
         col for col in editor_data.columns
         if col not in editable_columns
@@ -637,21 +634,15 @@ if st.session_state.source_data is not None:
         for bp, margin in zip(edited["BP/C"], edited["MIN M%"])
     ]
 
-    # AUTO-RECOMMENDATION + HUMAN OVERRIDE:
-    # If the owner has not changed RECC S.P manually, update it when MIN M%
-    # or STS. S.P changes. Once the owner edits RECC S.P, their value is kept.
+    # V1 RECOMMENDATION:
+    # RECC S.P is established from the owner's minimum-price rule.
+    # Entering STS. S.P must NOT change RECC S.P.
+    # The owner can edit RECC S.P directly in the worksheet.
     for i in edited.index:
-        current_recc = edited.at[i, "RECC S.P"]
-        previous_recc = old_recc.iloc[i] if i < len(old_recc) else np.nan
-        auto_recc = formula_recommended_price(
-            edited.at[i, "MIN S.P"], edited.at[i, "STS. S.P"]
-        )
-        if pd.isna(current_recc) or (
-            (pd.isna(previous_recc) and pd.isna(current_recc))
-            or (not pd.isna(previous_recc) and not pd.isna(current_recc)
-                and abs(float(current_recc) - float(previous_recc)) < 1e-9)
-        ):
-            edited.at[i, "RECC S.P"] = auto_recc
+        if pd.isna(edited.at[i, "RECC S.P"]):
+            edited.at[i, "RECC S.P"] = formula_recommended_price(
+                edited.at[i, "MIN S.P"], np.nan
+            )
 
     edited["RECC MARGIN %"] = [
         formula_recc_margin(sp, bp)
@@ -724,8 +715,10 @@ if st.session_state.source_data is not None:
     )
 
     st.caption(
-        "Human authority remains with the wholesaler. "
-        "The system calculates; the owner decides."
+        "**Don't just sell more. Know what you're making.**  \\n"
+        "See the numbers behind every price, protect your minimum margin, "
+        "and make pricing decisions with confidence.  \\n"
+        "**Your business. Your decision. Better visibility.**"
     )
 else:
     st.warning("Upload a QuickBooks Excel file to begin.")
