@@ -188,6 +188,25 @@ ALIASES = {
     "Balance": ["balance", "running balance"],
 }
 
+def infer_pc_from_product(item, um=None):
+    """Infer pieces per carton/bale/pack from names such as 800GX25 or 1KGX24.
+    If no pack multiplier is present, treat the received unit as one piece.
+    """
+    if pd.isna(item):
+        return 1.0
+    text = str(item).upper().replace("×", "X")
+    # Prefer the final X<number>, e.g. X25, X24, X200.
+    import re
+    matches = re.findall(r"X\s*(\d+(?:\.\d+)?)\b", text)
+    if matches:
+        try:
+            value = float(matches[-1])
+            if value > 0:
+                return value
+        except ValueError:
+            pass
+    return 1.0
+
 def clean_header(value):
     text = str(value).replace("\xa0", " ").strip().lower()
     text = " ".join(text.split())
@@ -285,6 +304,18 @@ def standardise_quickbooks(raw):
     # Convert numeric columns.
     for col in ["Qty", "P/C", "Cost Price", "Amount", "Balance"]:
         data[col] = pd.to_numeric(data[col], errors="coerce")
+
+    # QuickBooks invoices normally do not contain the Dabu P/C field.
+    # Build it from the pack notation in the product name (e.g. X25, X24).
+    # Existing P/C values are preserved; only missing values are inferred.
+    data["P/C"] = data.apply(
+        lambda row: (
+            row["P/C"]
+            if pd.notna(row["P/C"]) and row["P/C"] > 0
+            else infer_pc_from_product(row["Item"], row["U/M"])
+        ),
+        axis=1,
+    )
 
     if "Date" in data.columns:
         data["Date"] = pd.to_datetime(data["Date"], errors="coerce")
@@ -668,6 +699,8 @@ if st.session_state.source_data is not None:
         formula_current_margin(sp, bp)
         for sp, bp in zip(edited["STS. S.P"], edited["BP/C"])
     ]
+    # BASE PRICE = NEW S.P / P/C.
+    # P/C is the number of pieces inside one carton/bale/pack/bundle.
     edited["BASE PRICE"] = [
         formula_base_price(sp, pc)
         for sp, pc in zip(edited["NEW S.P"], edited["P/C"])
